@@ -2,7 +2,6 @@ import os
 import shutil
 import asyncio
 import subprocess
-import Theme
 from google import genai
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -68,7 +67,6 @@ class EscMenuScreen(ModalScreen):
 
 # ================= 3. 主介面模組 =================
 class LinuxPackageManagerApp(App):
-    # 📥 重新精簡過的快捷鍵綁定
     BINDINGS = [
         ("f1", "focus_search", "🔍 搜尋選中套件"),
         ("escape", "open_esc_menu", "⚙️ 系統選單"),
@@ -94,12 +92,15 @@ class LinuxPackageManagerApp(App):
     def __init__(self):
         super().__init__()
         self.ENABLE_COMMAND_PALETTE = False
-
-        self.ai = GeminiExplainer()
-
+        import Theme
+        self.register_theme(Theme.TOKYO_NIGHT)
+        self.register_theme(Theme.DRACULA)
+        self.register_theme(Theme.NORD)
+        
+        # 🔍 全自動、全通路硬體環境偵測
         self.sys_status = {
-            "apt": shutil.which("apt") is not None,
             "pacman": shutil.which("pacman") is not None,
+            "apt": shutil.which("apt") is not None,
             "snap": shutil.which("snap") is not None
         }
         self.left_pane_width = 40
@@ -109,16 +110,15 @@ class LinuxPackageManagerApp(App):
 
     def parse_size_to_bytes(self, size_str: str) -> float:
         clean_str = size_str.replace("[bold #e0af68]", "").replace("[/bold #e0af68]", "")
-        clean_str = clean_str.replace("[b white on #ff5555]", "").replace("[/b white on #ff5555]", "")
-        clean_str = clean_str.strip().lower()
+        clean_str = clean_str.replace("[b white on #ff5555]", "").replace("[/b white on #ff5555]", "").strip().lower()
         if "未知" in clean_str or not clean_str: return 0.0
         try:
             parts = clean_str.split()
             number = float(parts[0])
             unit = parts[1] if len(parts) > 1 else ""
-            if "tb" in unit or "t" == unit: return number * 1024 * 1024 * 1024 * 1024
-            elif "gb" in unit or "g" == unit: return number * 1024 * 1024 * 1024
-            elif "mb" in unit or "m" == unit: return number * 1024 * 1024
+            if "tb" in unit or "t" == unit: return number * (1024 ** 4)
+            elif "gb" in unit or "g" == unit: return number * (1024 ** 3)
+            elif "mb" in unit or "m" == unit: return number * (1024 ** 2)
             elif "kb" in unit or "k" in unit: return number * 1024
             return number
         except Exception: return 0.0
@@ -156,7 +156,7 @@ class LinuxPackageManagerApp(App):
                 yield Input(placeholder="在此輸入套件名稱，下方將自動高亮定位...", id="pkg-input")
                 yield Markdown("等待輸入中...", id="ai-output")
         with Vertical(classes="bottom-pane", id="bottom-pane"):
-            yield Label("📦 已安裝套件 (點擊標題可切換排序)：", classes="section-title")
+            yield Label("📦 全通路已安裝套件 (點擊欄位切換排序)：", classes="section-title")
             yield DataTable(id="installed-packages-table")
         yield Footer()
 
@@ -176,48 +176,103 @@ class LinuxPackageManagerApp(App):
             self.refresh_table_view(highlight_keyword=current_input)
             self.notify(f"📊 已切換容量排序 (由{'大到小' if self.sort_descending else '小到大'})")
 
+    # 🚀 ✨ 全通路並行掃描黑魔法
     async def load_installed_packages(self) -> None:
         table = self.query_one("#installed-packages-table", DataTable)
         table.clear()
         self.raw_packages = []
-        if self.sys_status["pacman"]:
-            try:
-                process = await asyncio.create_subprocess_exec("pacman", "-Qi", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                stdout, _ = await process.communicate()
-                if process.returncode == 0:
-                    raw_data = stdout.decode()
-                    package_blocks = raw_data.strip().split("\n\n")
-                    for block in package_blocks:
-                        name, version, size = None, None, "未知"
-                        for line in block.split("\n"):
-                            if "名稱" in line or "Name" in line: name = line.split(":", 1)[1].strip() if ":" in line else name
-                            elif "版本" in line or "Version" in line: version = line.split(":", 1)[1].strip() if ":" in line else version
-                            elif "大小" in line or "Size" in line: size = line.split(":", 1)[1].strip() if ":" in line else size
-                        if name and version:
-                            display_size = size.replace("KiB", "KB").replace("MiB", "MB").replace("GiB", "GB").replace("TiB", "TB")
-                            self.raw_packages.append({"manager": "pacman", "name": name, "version": version, "size": display_size})
-                    self.refresh_table_view()
-            except Exception as e:
-                table.add_row("錯誤", "無法讀取 pacman 清單", str(e), "-")
+
+        tasks = []
+        if self.sys_status["pacman"]: tasks.append(self._scan_pacman())
+        if self.sys_status["apt"]: tasks.append(self._scan_apt())
+        if self.sys_status["snap"]: tasks.append(self._scan_snap())
+
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        self.refresh_table_view()
+
+    async def _scan_pacman(self):
+        try:
+            process = await asyncio.create_subprocess_exec("pacman", "-Qi", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                package_blocks = stdout.decode().strip().split("\n\n")
+                for block in package_blocks:
+                    name, version, size = None, None, "未知"
+                    for line in block.split("\n"):
+                        if "名稱" in line or "Name" in line: name = line.split(":", 1)[1].strip() if ":" in line else name
+                        elif "版本" in line or "Version" in line: version = line.split(":", 1)[1].strip() if ":" in line else version
+                        elif "大小" in line or "Size" in line: size = line.split(":", 1)[1].strip() if ":" in line else size
+                    if name and version:
+                        display_size = size.replace("KiB", "KB").replace("MiB", "MB").replace("GiB", "GB").replace("TiB", "TB")
+                        self.raw_packages.append({"manager": "pacman", "name": name, "version": version, "size": display_size})
+        except Exception: pass
+
+    async def _scan_apt(self):
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "dpkg-query", "-W", "-f=${Status}\t${Package}\t${Version}\t${Installed-Size}\n",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                for line in stdout.decode().strip().split("\n"):
+                    parts = line.split("\t")
+                    if len(parts) >= 4 and "install ok installed" in parts[0]:
+                        name, version, raw_size = parts[1], parts[2], parts[3].strip()
+                        if raw_size and raw_size.isdigit():
+                            size_kb = float(raw_size)
+                            display_size = f"{size_kb / 1024:.2f} MB" if size_kb > 1024 else f"{size_kb:.2f} KB"
+                        else: display_size = "未知"
+                        self.raw_packages.append({"manager": "apt", "name": name, "version": version, "size": display_size})
+        except Exception: pass
+
+    async def _scan_snap(self):
+        try:
+            process = await asyncio.create_subprocess_exec("snap", "list", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                lines = stdout.decode().strip().split("\n")
+                # 跳過 snap list 的第一行標題
+                for line in lines[1:]:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        name = parts[0]
+                        version = parts[1]
+                        # snap 指令預設沒有直接輸出單一套件大小，我們設定為開源沙盒的「由系統管理」
+                        self.raw_packages.append({"manager": "snap", "name": name, "version": version, "size": "沙盒管理"})
+        except Exception: pass
 
     def refresh_table_view(self, highlight_keyword: str = "") -> None:
         table = self.query_one("#installed-packages-table", DataTable)
         table.clear()
+        
+        # 排序：把沒辦法量化大小的 "沙盒管理" 排在後面
         self.raw_packages.sort(key=lambda x: self.parse_size_to_bytes(x["size"]), reverse=self.sort_descending)
         target = highlight_keyword.strip().lower()
         matched_row_key = None
 
         for pkg in self.raw_packages:
             is_match = target and (target == pkg["name"].lower() or target in pkg["name"].lower())
+            
+            # 🎨 動態設定各通路霓虹標籤外觀顏色
+            if pkg["manager"] == "pacman": mgr_style = "[b green]pacman[/b green]"
+            elif pkg["manager"] == "apt": mgr_style = "[b cyan]apt[/b cyan]"
+            elif pkg["manager"] == "snap": mgr_style = "[b #ff79c6]snap[/b #ff79c6]" # 亮粉紅
+            else: mgr_style = pkg["manager"]
+
             if is_match:
-                manager_str = f"[b white on #ff5555]{pkg['manager']}[/b white on #ff5555]"
-                name_str = f"[b white on #ff5555]{pkg['name']}[/b white on #ff5555]"
-                version_str = f"[b white on #ff5555]{pkg['version']}[/b white on #ff5555]"
-                size_str = f"[b white on #ff5555]{pkg['size']}[/b white on #ff5555]"
-                row_key = table.add_row(manager_str, name_str, version_str, size_str)
+                row_key = table.add_row(
+                    f"[b white on #ff5555]{pkg['manager']}[/b white on #ff5555]",
+                    f"[b white on #ff5555]{pkg['name']}[/b white on #ff5555]",
+                    f"[b white on #ff5555]{pkg['version']}[/b white on #ff5555]",
+                    f"[b white on #ff5555]{pkg['size']}[/b white on #ff5555]"
+                )
                 matched_row_key = row_key
             else:
-                table.add_row("[b green]pacman[/b green]", pkg["name"], pkg["version"], f"[bold #e0af68]{pkg['size']}[/bold #e0af68]")
+                table.add_row(mgr_style, pkg["name"], pkg["version"], f"[bold #e0af68]{pkg['size']}[/bold #e0af68]")
+                
         if matched_row_key:
             try:
                 row_index = table.get_row_index(matched_row_key)
@@ -225,7 +280,6 @@ class LinuxPackageManagerApp(App):
                 table.scroll_to_row(row_index)
             except Exception: pass
 
-    # 💡 點擊套件改為「純呼叫 AI 解說」，徹底移除直接開外部終端機刪除套件的危險功能！
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         table = self.query_one("#installed-packages-table", DataTable)
         row_data = table.get_row(event.row_key)
@@ -258,45 +312,31 @@ class LinuxPackageManagerApp(App):
         self.query_one("#bottom-pane").styles.height = f"{self.bottom_pane_height}%"
         self.query_one("#top-box").styles.height = f"{100 - self.bottom_pane_height}%"
 
-    # ✨ 核心功能 1：按一下套件再按 F1，直接把名稱塞入右上角搜尋框並聚焦
     def action_focus_search(self) -> None:
         try:
             table = self.query_one("#installed-packages-table", DataTable)
-            cursor_row = table.cursor_coordinate.row
             row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
             row_data = table.get_row(row_key)
-            
-            # 清理 Rich 標籤，拿到乾淨的套件名稱
             package_name = row_data[1].replace("[b white on #ff5555]", "").replace("[/b white on #ff5555]", "").strip()
-            
-            # 連動到右上角搜尋框
             search_input = self.query_one("#pkg-input", Input)
             search_input.value = package_name
             search_input.focus()
-            
-            # 自動觸發高亮重新整理
             self.refresh_table_view(highlight_keyword=package_name)
             self.notify(f"🔍 已自動鎖定並搜尋：{package_name}")
         except Exception:
-            # 如果表格還沒載入完或游標沒對準，就直接聚焦空白搜尋框
             self.query_one("#pkg-input", Input).focus()
 
-    # ✨ 核心功能 2：按一下 ESC 鍵跳出控制選單
     def action_open_esc_menu(self) -> None:
         def handle_esc_callback(action: str) -> None:
             if action == "change_theme":
-                # 👉 當第二層選單回傳一整串 CSS 字串時
                 def apply_theme_callback(new_css: str) -> None:
                     if new_css:
-                        # 💥 萬用老版本寫法：直接將新樣式強制灌進主程式的 CSS 屬性中
                         self.app.css = new_css
                         self.refresh()
                         self.notify("🎨 佈景主題切換成功！")
-                
                 self.push_screen(ThemeMenuScreen(), apply_theme_callback)
             elif action == "quit":
                 self.action_quit()
-
         self.push_screen(EscMenuScreen(), handle_esc_callback)
 
 if __name__ == "__main__":
