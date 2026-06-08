@@ -22,7 +22,7 @@
 
 ```bash
 # 1. 建立並啟用 Python 虛擬環境
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # 2. 一鍵安裝官方標準相容依賴套件（包含 Textual 與 Google GenAI）
