@@ -68,6 +68,7 @@ class EscMenuScreen(ModalScreen):
 # ================= 3. 主介面模組 =================
 class LinuxPackageManagerApp(App):
     BINDINGS = [
+        ("Q", "quit", "系統離開"),
         ("f1", "focus_search", "搜尋選中套件"),
         ("escape", "open_esc_menu", "系統選單"),
         ("ctrl+left", "resize_left_pane(-2)", "縮小左欄"),
@@ -111,6 +112,11 @@ class LinuxPackageManagerApp(App):
         
         # 🔄 就在這裡加！新增當前優先置頂的套件來源管理員（None 代表預設不置頂）
         self.current_priority_manager = None
+    def on_key(self, event: __import__("textual").events.Key) -> None:
+        if event.key == "escape":
+            event.stop()  # 阻止事件繼續傳遞給其他元件
+            self.exit()   # 物理退出 Textual App
+
 
     def parse_size_to_bytes(self, size_str: str) -> float:
         clean_str = size_str.replace("[bold #e0af68]", "").replace("[/bold #e0af68]", "")
@@ -179,37 +185,19 @@ class LinuxPackageManagerApp(App):
         asyncio.create_task(self.load_installed_packages())
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
-        header_text = str(event.label).lower().strip()
-        
-        if header_text in ["來源", "manager"]:
-            # 🔄 來源按鈕點擊：在目前系統可用的包管理員 (True) 之間輪播洗牌！
-            available_managers = [mgr for mgr, avail in self.sys_status.items() if avail]
-            
-            if not available_managers:
-                return
-                
-            if self.current_priority_manager not in available_managers:
-                self.current_priority_manager = available_managers[0]
-            else:
-                curr_idx = available_managers.index(self.current_priority_manager)
-                next_idx = curr_idx + 1
-                if next_idx >= len(available_managers):
-                    # 如果已經輪播完一圈，可以選擇設回 None (取消置頂) 或是回到第一個
-                    # 這裡設定回到第一個，讓你能源源不絕切換
-                    self.current_priority_manager = available_managers[0]
-                else:
-                    self.current_priority_manager = available_managers[next_idx]
-            
-            self.notify(f"🔄 LPM 排序洗牌：目前優先置頂 [bold #e0af68]{self.current_priority_manager}[/] 套件")
-            
-        elif header_text in ["套件名稱", "name"]:
-            self.current_sort_by = "name"
-            self.sort_descending = not self.sort_descending
-        elif header_text in ["佔用容量", "size", "目前版本", "version"]:
-            self.current_sort_by = "size"
-            self.sort_descending = not self.sort_descending
-            
-        self.refresh_table_view(sort_by=self.current_sort_by)
+        # 🎯 精準對齊 5 欄位的點擊排序目標
+        if event.column_index == 1:
+            self.current_sort = "name"
+        elif event.column_index == 2:
+            self.current_sort = "group"  # 👈 點擊應用群組
+        elif event.column_index == 4:
+            self.current_sort = "size"   # 👈 點擊佔用容量（移到索引 4）
+        else:
+            return
+
+        self.sort_descending = not self.sort_descending
+        # 🚀 關鍵：確保傳入當前的排序目標
+        self.refresh_table_view(sort_by=self.current_sort)
 
     async def load_installed_packages(self) -> None:
         table = self.query_one("#installed-packages-table", DataTable)
@@ -279,45 +267,75 @@ class LinuxPackageManagerApp(App):
     def refresh_table_view(self, highlight_keyword: str = "", sort_by: str = "size") -> None:
         table = self.query_one("#installed-packages-table", DataTable)
         table.clear()
+
+        # 🎯 欄位物理重置（你已經寫好的部分，保留不變）
+        table.clear(columns=True)
+        table.add_column("[bold #7aa2f7]來源[/]", width=8)
+        table.add_column("[bold #7aa2f7]套件名稱[/]", width=22)
+        table.add_column("[bold #e0af68]應用群組[/]", width=15)
+        table.add_column("[bold #7aa2f7]目前版本[/]", width=22)
+        table.add_column("[bold #7aa2f7]佔用容量[/]", width=12)
+
+        # 🎯 核心修復：防禦性抓取全域套件清單
+        # 如果 self.raw_packages 是空的，我們自動 fallback 去讀 self.installed_packages 或是原本的資料庫變數
+        packages_source = []
+        if hasattr(self, 'raw_packages') and self.raw_packages:
+            packages_source = self.raw_packages
+        elif hasattr(self, 'installed_packages') and self.installed_packages:
+            packages_source = self.installed_packages
         
+        # 如果發現兩個都是空的，說明背景非同步還在加載，先跳出避免空迴圈
+        if not packages_source:
+            return
+
         filtered = []
         kw = highlight_keyword.lower().strip()
-        for p in self.raw_packages:
+        for p in packages_source:  # 👈 使用安全的資料來源
             if not kw or kw in p.get("name", "").lower():
                 filtered.append(p)
-                
-        # 🛠️ 核心洗牌邏輯：定義排序的 Key
+
+        # 🔧 核心洗牌邏輯
         def sort_key(x):
-            # 1. 來源置頂權重：如果套件來源符合當前指定的優先來源，權重為 1，否則為 0
+            # 1. 來源置頂權重
             is_priority = 1 if x.get("manager") == self.current_priority_manager else 0
             
-            # 2. 次要排序依據（大小或名稱）
-            if sort_by == "size":
+            # 🎯 強制對齊：如果有點擊狀態，以 current_sort 為準；否則吃傳進來的參數
+            current_sort_target = self.current_sort if hasattr(self, 'current_sort') else sort_by
+            
+            # 2. 次要排序依據
+            if current_sort_target == "size":
                 secondary = self.parse_size_to_bytes(x.get("size", ""))
+            elif current_sort_target == "group":
+                secondary = x.get("group", "system").lower()
             else:
                 secondary = x.get("name", "").lower()
                 
-            # 回傳 tuple：(是否置頂, 次要排序值)
-            return (is_priority, secondary if sort_by == "size" else 0)
+            return (is_priority, secondary)
 
-        # 進行排序 (配合你原本的 self.sort_descending)
-        if sort_by == "size":
-            filtered.sort(key=sort_key, reverse=self.sort_descending)
-        elif sort_by == "name":
-            if not self.current_priority_manager:
-                filtered.sort(key=lambda x: x.get("name", "").lower(), reverse=self.sort_descending)
-            else:
-                filtered.sort(key=lambda x: (1 if x.get("manager") == self.current_priority_manager else 0, x.get("name", "").lower()), reverse=self.sort_descending)
-            
+        # 🔀 執行排序
+        filtered.sort(key=sort_key, reverse=self.sort_descending)
+
+        # 🚀 倒進畫面上：精準塞入 5 個欄位資料
         for p in filtered:
             pkg_manager = p.get("manager", "unknown")
             pkg_name = p.get("name", "unknown")
             pkg_version = p.get("version", "unknown")
             pkg_size = p.get("size", "N/A")
             
+            # 🎯 建立防禦型群組偵測
+            app_group = p.get("group", "System")
+            if "gnome" in pkg_name.lower() or "gtk" in pkg_name.lower():
+                app_group = "GNOME"
+            elif "kde" in pkg_name.lower() or "qt" in pkg_name.lower():
+                app_group = "KDE"
+            elif pkg_name in ["python3", "gcc", "git", "make"]:
+                app_group = "Development"
+
+            # 💡 餵入 5 個元素，把應用群組高亮塞在第 3 個位置！
             table.add_row(
                 f"[bold #e0af68]{pkg_manager}[/]",
                 pkg_name,
+                f"[bold #9ece6a]{app_group}[/]",
                 pkg_version,
                 f"[bold #e0af68]{pkg_size}[/]"
             )
@@ -339,6 +357,7 @@ class LinuxPackageManagerApp(App):
             asyncio.create_task(self.update_ai_pane(package_name, markdown_widget))
         except Exception:
             pass
+    
 
     # 🤖 點擊或 Enter 直接觸發原生終端機解除安裝
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -412,7 +431,7 @@ class LinuxPackageManagerApp(App):
         except Exception as e:
             self.notify(f"❌ 無法開啟外部終端機: {str(e)}", severity="error")        
 
-
+    
     async def update_ai_pane(self, package_name, widget):
         ai_response = await self.ai.ask_gemini(package_name)
         widget.update(ai_response)
