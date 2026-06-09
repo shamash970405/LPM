@@ -103,9 +103,14 @@ class LinuxPackageManagerApp(App):
             "snap": shutil.which("snap") is not None
         }
         self.left_pane_width = 40
+        self.left_pane_width = 40
         self.bottom_pane_height = 60
-        self.sort_descending = True
+        self.sort_descending = True  # 保留你原本的變數
+        self.current_sort_by = "size" # 預設依大小排序
         self.raw_packages = []
+        
+        # 🔄 就在這裡加！新增當前優先置頂的套件來源管理員（None 代表預設不置頂）
+        self.current_priority_manager = None
 
     def parse_size_to_bytes(self, size_str: str) -> float:
         clean_str = size_str.replace("[bold #e0af68]", "").replace("[/bold #e0af68]", "")
@@ -174,20 +179,37 @@ class LinuxPackageManagerApp(App):
         asyncio.create_task(self.load_installed_packages())
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
-        # 📊 點擊「套件名稱」欄位 (Index 為 1)
-        if event.column_index == 1:
-            # 借用原本的布林值來切換：True 代表 A~Z，False 代表 Z~A
-            self.sort_descending = not self.sort_descending
-            current_input = self.query_one("#pkg-input", Input).value
-            self.refresh_table_view(highlight_keyword=current_input, sort_by="name")
-            self.notify(f"🔤 已切換名稱排序 (由{'A到Z' if self.sort_descending else 'Z到A'})")
+        header_text = str(event.label).lower().strip()
+        
+        if header_text in ["來源", "manager"]:
+            # 🔄 來源按鈕點擊：在目前系統可用的包管理員 (True) 之間輪播洗牌！
+            available_managers = [mgr for mgr, avail in self.sys_status.items() if avail]
             
-        # 📊 點擊「佔用容量」欄位 (Index 為 3)
-        elif event.column_index == 3:
+            if not available_managers:
+                return
+                
+            if self.current_priority_manager not in available_managers:
+                self.current_priority_manager = available_managers[0]
+            else:
+                curr_idx = available_managers.index(self.current_priority_manager)
+                next_idx = curr_idx + 1
+                if next_idx >= len(available_managers):
+                    # 如果已經輪播完一圈，可以選擇設回 None (取消置頂) 或是回到第一個
+                    # 這裡設定回到第一個，讓你能源源不絕切換
+                    self.current_priority_manager = available_managers[0]
+                else:
+                    self.current_priority_manager = available_managers[next_idx]
+            
+            self.notify(f"🔄 LPM 排序洗牌：目前優先置頂 [bold #e0af68]{self.current_priority_manager}[/] 套件")
+            
+        elif header_text in ["套件名稱", "name"]:
+            self.current_sort_by = "name"
             self.sort_descending = not self.sort_descending
-            current_input = self.query_one("#pkg-input", Input).value
-            self.refresh_table_view(highlight_keyword=current_input, sort_by="size")
-            self.notify(f"📊 已切換容量排序 (由{'大到小' if self.sort_descending else '小到大'})")
+        elif header_text in ["佔用容量", "size", "目前版本", "version"]:
+            self.current_sort_by = "size"
+            self.sort_descending = not self.sort_descending
+            
+        self.refresh_table_view(sort_by=self.current_sort_by)
 
     async def load_installed_packages(self) -> None:
         table = self.query_one("#installed-packages-table", DataTable)
@@ -258,43 +280,47 @@ class LinuxPackageManagerApp(App):
         table = self.query_one("#installed-packages-table", DataTable)
         table.clear()
         
-        # 🎯 根據點擊的欄位，執行不同的排序
-        if sort_by == "name":
-            # 照套件名稱字母排序 (A~Z 或 Z~A)
-            # 因為 A~Z 是正序，所以 reverse 要帶入與 self.sort_descending 相反的值
-            self.raw_packages.sort(key=lambda x: x["name"].lower(), reverse=not self.sort_descending)
-        else:
-            # 照容量大小排序 (原本的邏輯)
-            self.raw_packages.sort(key=lambda x: self.parse_size_to_bytes(x["size"]), reverse=self.sort_descending)
-            
-        target = highlight_keyword.strip().lower()
-        matched_row_key = None
-
-        # 🔄 下方的渲染表格迴圈 (完全不用動，維持原樣)
-        for pkg in self.raw_packages:
-            if pkg["manager"] == "pacman": mgr_style = "[b green]pacman[/b green]"
-            elif pkg["manager"] == "apt": mgr_style = "[b cyan]apt[/b cyan]"
-            elif pkg["manager"] == "snap": mgr_style = "[b #ff79c6]snap[/b #ff79c6]"
-            else: mgr_style = pkg["manager"]
-
-            is_match = target and (target == pkg["name"].lower() or target in pkg["name"].lower())
-            if is_match:
-                row_key = table.add_row(
-                    f"[b white on #ff5555]{pkg['manager']}[/b white on #ff5555]",
-                    f"[b white on #ff5555]{pkg['name']}[/b white on #ff5555]",
-                    f"[b white on #ff5555]{pkg['version']}[/b white on #ff5555]",
-                    f"[b white on #ff5555]{pkg['size']}[/b white on #ff5555]"
-                )
-                matched_row_key = row_key
-            else:
-                table.add_row(mgr_style, pkg["name"], pkg["version"], f"[bold #e0af68]{pkg['size']}[/bold #e0af68]")
+        filtered = []
+        kw = highlight_keyword.lower().strip()
+        for p in self.raw_packages:
+            if not kw or kw in p.get("name", "").lower():
+                filtered.append(p)
                 
-        if matched_row_key:
-            try:
-                row_index = table.get_row_index(matched_row_key)
-                table.cursor_coordinate = (row_index, 1)
-                table.scroll_to_row(row_index)
-            except Exception: pass
+        # 🛠️ 核心洗牌邏輯：定義排序的 Key
+        def sort_key(x):
+            # 1. 來源置頂權重：如果套件來源符合當前指定的優先來源，權重為 1，否則為 0
+            is_priority = 1 if x.get("manager") == self.current_priority_manager else 0
+            
+            # 2. 次要排序依據（大小或名稱）
+            if sort_by == "size":
+                secondary = self.parse_size_to_bytes(x.get("size", ""))
+            else:
+                secondary = x.get("name", "").lower()
+                
+            # 回傳 tuple：(是否置頂, 次要排序值)
+            return (is_priority, secondary if sort_by == "size" else 0)
+
+        # 進行排序 (配合你原本的 self.sort_descending)
+        if sort_by == "size":
+            filtered.sort(key=sort_key, reverse=self.sort_descending)
+        elif sort_by == "name":
+            if not self.current_priority_manager:
+                filtered.sort(key=lambda x: x.get("name", "").lower(), reverse=self.sort_descending)
+            else:
+                filtered.sort(key=lambda x: (1 if x.get("manager") == self.current_priority_manager else 0, x.get("name", "").lower()), reverse=self.sort_descending)
+            
+        for p in filtered:
+            pkg_manager = p.get("manager", "unknown")
+            pkg_name = p.get("name", "unknown")
+            pkg_version = p.get("version", "unknown")
+            pkg_size = p.get("size", "N/A")
+            
+            table.add_row(
+                f"[bold #e0af68]{pkg_manager}[/]",
+                pkg_name,
+                pkg_version,
+                f"[bold #e0af68]{pkg_size}[/]"
+            )
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         try:
