@@ -131,6 +131,7 @@ class LinuxPackageManagerApp(App):
         }
         self.left_pane_width = 40
         self.bottom_pane_height = 60
+        self.ai_task = None
 
    # 🎯 物理分流：完全不使用 RowSelected 事件，改用精準的鍵盤事件
     def on_key(self, event: __import__("textual").events.Key) -> None:
@@ -440,11 +441,29 @@ class LinuxPackageManagerApp(App):
             import re
             def clean_markup(text_str: str) -> str:
                 return re.sub(r'\[\/?[a-zA-Z0-9#\s_@-]+\]', '', text_str).strip()
+            
             package_name = clean_markup(str(row_data[1]))
             markdown_widget = self.query_one("#ai-output", Markdown)
-            markdown_widget.update(f"⏳ 正在幫您通靈已安裝的 `{package_name}`...")
-            asyncio.create_task(self.update_ai_pane(package_name, markdown_widget))
-        except Exception: pass
+            markdown_widget.update(f"⏳ 等待游標停駐以分析 `{package_name}`...")
+
+            # 🛡️ 防抖機制 (Debounce)：如果前一個計時器還在跑，直接取消上一次的 API 呼叫！
+            if self.ai_task:
+                self.ai_task.cancel()
+
+            # 建立一個新的延遲執行任務
+            async def delayed_ai_request(pkg_name, widget):
+                try:
+                    await asyncio.sleep(0.6)  # ⏱️ 給予 0.6 秒的冷卻判定時間
+                    widget.update(f"⏳ 正在為您通靈已安裝的 `{pkg_name}`...")
+                    await self.update_ai_pane(pkg_name, widget)
+                except asyncio.CancelledError:
+                    pass # 任務被取消（因為游標又移走了），安靜退出不噴錯
+
+            # 把這個新任務派發下去，並記錄在 self.ai_task
+            self.ai_task = asyncio.create_task(delayed_ai_request(package_name, markdown_widget))
+
+        except Exception: 
+            pass
     
     async def update_ai_pane(self, package_name, widget):
         ai_response = await self.ai.ask_gemini(package_name)

@@ -1,0 +1,43 @@
+{
+  // 1. 核心字型調教：焊上高貴的連體字
+  "editor.fontFamily": "'JetBrains Mono', 'Fira Code', 'Noto Sans Mono CJK TC', monospace",
+  "editor.fontSize": 14,
+  "editor.fontLigatures": true, // 開啟炫酷的連體字
+  "editor.lineHeight": 20,      // 讓行距呼吸喵！
+
+  // 2. 完全體極簡畫布喵：把傲嬌的輔助介面通通隱藏！ ✨
+  "editor.minimap.enabled": false, // 💡 [核心亮點]：連根拔除右邊那個骨折的小地圖！
+  //"workbench.activityBar.location": "hidden", // 隱藏左邊那排圖示欄喵 (用快捷鍵 Ctrl+B 切換就好喵！)
+  "editor.scrollbar.horizontal": "hidden", // 隱藏水平捲軸
+  "editor.renderLineHighlight": "all",     // 高亮當前行
+
+  // 3. 視窗視覺咬合喵
+  "workbench.iconTheme": "material-icon-theme",
+  "workbench.colorCustomizations": {
+    // 自訂暗色系邊框喵，完美對線你的 Hyprland 桌面
+    "editor.background": "#1e1e2e", 
+    "sideBar.background": "#181825"
+  },
+
+  // ---------------- [ 魔理沙 background 專屬防線 ] ----------------
+  "background.enabled": true,
+  "background.useDefault": false,
+  "background.customImages": [
+    // 💡 記得換成你 ThinkPad 肚子裡實體圖片的絕對路徑喵！
+    "file:///home/xier/圖片/ee29599dc5d34d8dbe85347178c5cf43.jpg"
+  ],
+  "background.style": {
+    "content": "''",
+    "pointer-events": "none",
+    "position": "absolute",
+    "top": "0",
+    "right": "0",
+    "bottom": "0",
+    "left": "0",
+    "z-index": "99999",
+    "background-repeat": "no-repeat",
+    "background-size": "cover",      // 讓圖片完美滿版喵！
+    "background-position": "center",  // 居中對齊
+    "opacity": 0.08                   // 🎛️ 靈魂透明度 (8%)喵！
+  }
+}
