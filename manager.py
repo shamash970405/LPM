@@ -124,10 +124,20 @@ class LinuxPackageManagerApp(App):
         self.current_priority_manager = "apt"  # 🎯 預設優先置頂 Ubuntu APT
 
         # 全自動硬體環境偵測
+        # 🌍 終極全自動硬體環境偵測
         self.sys_status = {
-            "pacman": shutil.which("pacman") is not None,
-            "apt": shutil.which("apt") is not None,
-            "snap": shutil.which("snap") is not None
+            "pacman": shutil.which("pacman") is not None,  # Arch
+            "yay": shutil.which("yay") is not None,        # Arch (AUR)
+            "paru": shutil.which("paru") is not None,      # Arch (AUR 另一主流)
+            "apt": shutil.which("apt") is not None,        # Ubuntu/Debian
+            "dnf": shutil.which("dnf") is not None,        # Fedora/RHEL
+            "zypper": shutil.which("zypper") is not None,  # openSUSE
+            "apk": shutil.which("apk") is not None,        # Alpine Linux
+            "emerge": shutil.which("emerge") is not None,  # Gentoo
+            "xbps": shutil.which("xbps-install") is not None, # Void Linux
+            "snap": shutil.which("snap") is not None,      # 跨平台沙盒
+            "flatpak": shutil.which("flatpak") is not None,# 跨平台沙盒
+            "brew": shutil.which("brew") is not None       # Homebrew (Linuxbrew)
         }
         self.left_pane_width = 40
         self.bottom_pane_height = 60
@@ -163,14 +173,20 @@ class LinuxPackageManagerApp(App):
                     self.notify(f"🗑️ 鍵盤觸發：準備解除安裝 {raw_mgr.upper()} 套件：{package_name}...")
                     
                     # 🛠️ 根據來源判定刪除指令
-                    if raw_mgr == "pacman": 
-                        uninstall_cmd = f"sudo pacman -Rns {package_name}"
-                    elif raw_mgr == "apt": 
-                        uninstall_cmd = f"sudo apt purge -y {package_name}"
-                    elif raw_mgr == "snap": 
-                        uninstall_cmd = f"sudo snap remove {package_name}"
-                    else: 
-                        return
+                    # 🛠️ 根據來源判定刪除指令
+                    if raw_mgr == "pacman": uninstall_cmd = f"sudo pacman -Rns {package_name}"
+                    elif raw_mgr == "yay": uninstall_cmd = f"yay -Rns {package_name}"
+                    elif raw_mgr == "paru": uninstall_cmd = f"paru -Rns {package_name}"
+                    elif raw_mgr == "apt": uninstall_cmd = f"sudo apt purge -y {package_name}"
+                    elif raw_mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {package_name}"
+                    elif raw_mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {package_name}"
+                    elif raw_mgr == "apk": uninstall_cmd = f"sudo apk del {package_name}"
+                    elif raw_mgr == "emerge": uninstall_cmd = f"sudo emerge --deselect {package_name}"
+                    elif raw_mgr == "xbps": uninstall_cmd = f"sudo xbps-remove -R {package_name}"
+                    elif raw_mgr == "snap": uninstall_cmd = f"sudo snap remove {package_name}"
+                    elif raw_mgr == "flatpak": uninstall_cmd = f"flatpak uninstall -y {package_name}"
+                    elif raw_mgr == "brew": uninstall_cmd = f"brew uninstall {package_name}"
+                    else: return
 
                     import shutil, subprocess, asyncio
                     # 🚀 自動偵測桌面環境可用的終端機
@@ -306,17 +322,22 @@ class LinuxPackageManagerApp(App):
             return  # 如果點到空白處、沒有組件控制權，直接安全跳出
         
         # 🎯 根據點擊的標籤 id，精準切換置頂來源
-        if target_id == "lbl-pacman":
-            self.current_priority_manager = "pacman"
-            self.notify("🎯 已將優先套件庫切換至：Arch Pacman")
-        elif target_id == "lbl-apt":
-            self.current_priority_manager = "apt"
-            self.notify("🎯 已將優先套件庫切換至：Ubuntu APT")
-        elif target_id == "lbl-snap":
-            self.current_priority_manager = "snap"
-            self.notify("🎯 已將優先套件庫切換至：Snap 沙盒")
-        else:
-            return
+        # 🎯 根據點擊的標籤 id，精準切換置頂來源
+        if target_id == "lbl-pacman": self.current_priority_manager = "pacman"
+        elif target_id == "lbl-yay": self.current_priority_manager = "yay"
+        elif target_id == "lbl-paru": self.current_priority_manager = "paru"
+        elif target_id == "lbl-apt": self.current_priority_manager = "apt"
+        elif target_id == "lbl-dnf": self.current_priority_manager = "dnf"
+        elif target_id == "lbl-zypper": self.current_priority_manager = "zypper"
+        elif target_id == "lbl-apk": self.current_priority_manager = "apk"
+        elif target_id == "lbl-emerge": self.current_priority_manager = "emerge"
+        elif target_id == "lbl-xbps": self.current_priority_manager = "xbps"
+        elif target_id == "lbl-snap": self.current_priority_manager = "snap"
+        elif target_id == "lbl-flatpak": self.current_priority_manager = "flatpak"
+        elif target_id == "lbl-brew": self.current_priority_manager = "brew"
+        else: return
+        
+        self.notify(f"🎯 已將優先套件庫切換至：{self.current_priority_manager}")
             
         # 🚀 帶著搜尋框關鍵字，滿血洗牌刷新 5 欄位表格！
         current_keyword = self.query_one("#pkg-input").value if hasattr(self, 'query_one') else ""
