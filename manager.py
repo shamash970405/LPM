@@ -201,6 +201,23 @@ class LinuxPackageManagerApp(App):
                 # 只有真正發生卸載異常時，才跳出紅字警告
                 self.notify(f"❌ 卸載程式啟動失敗: {str(e)}", severity="error")
 
+    def get_os_name(self) -> str:
+        """讀取系統 /etc/os-release 來獲取準確的 Linux 發行版名稱"""
+        try:
+            import platform
+            if hasattr(platform, 'freedesktop_os_release'):
+                return platform.freedesktop_os_release().get('PRETTY_NAME', 'Linux')
+        except Exception: pass
+        
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        return line.split("=")[1].strip().strip('"')
+        except Exception: pass
+        return "未知 Linux 發行版"
+
+
     def parse_size_to_bytes(self, size_str: str) -> float:
         clean_str = size_str.replace("[bold #e0af68]", "").replace("[/bold #e0af68]", "")
         clean_str = clean_str.replace("[b white on #ff5555]", "").replace("[/b white on #ff5555]", "").strip().lower()
@@ -238,28 +255,34 @@ class LinuxPackageManagerApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        
+        # 📦 上半部：左右兩欄並排的水平容器
         with Horizontal(classes="top-box", id="top-box"):
+            
+            # ⬅️ 左欄：系統狀態與硬碟資訊
             with Vertical(classes="left-pane", id="left-pane"):
                 yield Label("🔍 系統環境偵測：", classes="section-title")
+                yield Label(f"  發行版：[bold #9ece6a]{self.get_os_name()}[/]", classes="status-label")
+                yield Label("  套件管理員：", classes="status-label")
                 
-                # 🚀 完美初心外觀：重載回純文字清單，但給予隱形點擊 id 屬性
+                # 這裡只預留標籤位置，讓底下的 load_installed_packages 去更新數字
                 for mgr, avail in self.sys_status.items():
-                    status_icon = "✅ 可用" if avail else "❌ 未安裝"
-                    yield Label(
-                        f"  - {mgr}: {status_icon}", 
-                        id=f"lbl-{mgr}", 
-                        classes="status-label"
-                    )
+                    if avail:
+                        yield Label(f"   - {mgr} (計算中...)", id=f"lbl-{mgr}", classes="status-label")
                 
                 yield Label(self.get_disk_info(), classes="disk-label")
             
+            # ➡️ 右欄：Gemini AI 查詢面板 (就是你剛剛不小心弄不見的這塊！)
             with Vertical(classes="right-pane"):
                 yield Label("🤖 Gemini AI 智慧解說與查詢：", classes="section-title")
                 yield Input(placeholder="在此輸入套件名稱，下方將自動高亮定位...", id="pkg-input")
                 yield Markdown("等待輸入中...", id="ai-output")
                 
+        # 📦 下半部：套件表格
         with Vertical(classes="bottom-pane", id="bottom-pane"):
             yield Label("📦 全通路已安裝套件 (點擊欄位切換排序 / 游標定位後按 Enter 鍵解除安裝)：", classes="section-title")
+            
+            # 確保你使用的是 DataTable (如果你先前改成 PackageTable，這裡請維持 PackageTable)
             yield DataTable(id="installed-packages-table")
             
         yield Footer()
@@ -326,6 +349,17 @@ class LinuxPackageManagerApp(App):
 
         if tasks:
             await asyncio.gather(*tasks)
+
+        # 🎯 這裡才是更新標籤文字的正確位置！
+        for mgr, avail in self.sys_status.items():
+            if avail:
+                # 算出這個套件管理員的總套件數
+                mgr_count = sum(1 for p in self.raw_packages if p.get("manager") == mgr)
+                try:
+                    lbl = self.query_one(f"#lbl-{mgr}")
+                    lbl.update(f"   - {mgr} [bold #e0af68]({mgr_count})[/]")
+                except Exception as e:
+                    self.notify(f"⚠️ {mgr} 標籤更新失敗: {str(e)}", severity="warning")
 
         self.refresh_table_view()
 
