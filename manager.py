@@ -144,45 +144,139 @@ class LinuxPackageManagerApp(App):
         self.ai_task = None
 
    # 🎯 物理分流：完全不使用 RowSelected 事件，改用精準的鍵盤事件
+    # 🎯 物理分流：升級版鍵盤事件核心（支援 S 鍵多選與 Enter 批次刪除）
     def on_key(self, event: __import__("textual").events.Key) -> None:
-
+        
+        # 🔓 釋放 Esc 鍵！讓事件交給 BINDINGS 的 open_esc_menu 處理
         if event.key == 'escape':
+            # 🛡️ 攔截：如果正在多選模式，就清空選取，絕對不開選單！
+            if hasattr(self, "selected_packages") and self.selected_packages:
+                self.selected_packages.clear()
+                self.clear_notifications()
+                self.notify("🚫 已清空所有待刪除項目", severity="warning", timeout=2)
+                # 強制阻止事件傳遞給預設的選單 BINDINGS
+                event.prevent_default()
+                event.stop()
+                return
             return
 
         # 🚪 經典 Linux 快捷鍵：按 Q 退出程式
         if event.key.lower() == "q":
-            # 🛡️ 焦點檢查：如果游標「不在」搜尋輸入框裡，才執行退出
             if not (self.focused and getattr(self.focused, "id", None) == "pkg-input"):
                 self.exit()
+                return
 
-        # 🔑 當使用者按下實體 Enter 鍵時！
-        if event.key == "enter":
-            
-            # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷，絕對不觸發卸載！
+        # 🧰 初始化動態選擇清單 (防護罩：避免動到 __init__)
+        if not hasattr(self, "selected_packages"):
+            self.selected_packages = {}
+
+        # 🧪 共通文字清洗工具 (提到最上層供 S 鍵與 Enter 鍵共享)
+        import re
+        def clean_markup(text_str: str) -> str:
+            return re.sub(r'\[.*?\]', '', str(text_str)).strip()
+
+        # 📌 【Space 鍵：多選 / 取消選取 模式 (TUI 界的多選標準)】
+        if event.key == "space":
+            # 🛡️ 焦點檢查：如果游標在搜尋輸入框裡，放行讓使用者打半形空白！
             if self.focused and getattr(self.focused, "id", None) == "pkg-input":
                 return
 
-            # 🛡️ 防呆雷達：如果在設定視窗裡找不到表格，就「安靜跳出」不要噴錯！
             try:
                 table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
             except Exception:
-                return # 找不到表格代表正在輸入金鑰或搜尋，直接放行！
+                return
 
-            # 🎯 抓取目前游標停留在哪一行
             if table.cursor_coordinate:
                 row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
                 row_data = table.get_row(row_key)
                 
-                import re
-                def clean_markup(text_str: str) -> str:
-                    return re.sub(r'\[.*?\]', '', str(text_str)).strip()
+                raw_mgr = clean_markup(row_data[0])
+                package_name = clean_markup(row_data[1])
+                pkg_unique_id = f"{raw_mgr}:{package_name}"
+                
+                # 🔄 切換選取狀態
+                if pkg_unique_id in self.selected_packages:
+                    del self.selected_packages[pkg_unique_id]
+                else:
+                    self.selected_packages[pkg_unique_id] = {"manager": raw_mgr, "name": package_name}
+                
+                # 🧹 先清除畫面上所有的舊通知 (避免重複按導致通知疊成一座山)
+                self.clear_notifications()
+
+                # 📢 顯示常駐的待刪除「詳細名單」面板
+                if self.selected_packages:
+                    # 📝 整理出所有選取的套件名稱
+                    selected_names = [pkg["name"] for pkg in self.selected_packages.values()]
+                    
+                    # 🛡️ 版面防爆機制：如果選太多，做個縮寫避免通知遮住整個螢幕
+                    if len(selected_names) > 5:
+                        display_text = ", ".join(selected_names[:5]) + f" ...等共 {len(selected_names)} 項"
+                    else:
+                        display_text = ", ".join(selected_names)
+
+                    self.notify(
+                        f"即將刪除：\n[bold white]{display_text}[/]\n\n👉 按 [Enter] 執行批次刪除\n👉 按 [Esc] 取消所有選取",
+                        title=f"📋 批次刪除待命中 ({len(self.selected_packages)} 項)",
+                        severity="warning",
+                        timeout=99999999  # 🌟 永遠顯示
+                    )
+                return
+
+        # 🔑 【Enter 鍵：執行刪除（單一或批次自動分流）】
+        if event.key == "enter":
+            # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷
+            if self.focused and getattr(self.focused, "id", None) == "pkg-input":
+                return
+
+            try:
+                table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
+            except Exception:
+                return 
+
+            uninstall_cmd = ""
+            
+            # 🚨 分流 A：如果選取清單裡有東西，啟動「批次大規模刪除指令建構引擎」！
+            if self.selected_packages:
+                # 🧠 智能分組：把相同管理員的套件聚在一起
+                grouped_tasks = {}
+                for pkg_info in self.selected_packages.values():
+                    grouped_tasks.setdefault(pkg_info["manager"], []).append(pkg_info["name"])
+                
+                # 🛠️ 根據不同管理員串聯多個套件 (例如：apt purge -y pkg1 pkg2)
+                cmd_list = []
+                for mgr, pkgs in grouped_tasks.items():
+                    pkgs_str = " ".join(pkgs)
+                    if mgr == "pacman": cmd_list.append(f"sudo pacman -Rns {pkgs_str}")
+                    elif mgr == "yay": cmd_list.append(f"yay -Rns {pkgs_str}")
+                    elif mgr == "paru": cmd_list.append(f"paru -Rns {pkgs_str}")
+                    elif mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
+                    elif mgr == "dnf": cmd_list.append(f"sudo dnf remove -y {pkgs_str}")
+                    elif mgr == "zypper": cmd_list.append(f"sudo zypper remove -y {pkgs_str}")
+                    elif mgr == "apk": cmd_list.append(f"sudo apk del {pkgs_str}")
+                    elif mgr == "emerge": cmd_list.append(f"sudo emerge --deselect {pkgs_str}")
+                    elif mgr == "xbps": cmd_list.append(f"sudo xbps-remove -R {pkgs_str}")
+                    elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
+                    elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
+                    elif mgr == "brew": cmd_list.append(f"brew uninstall {pkgs_str}")
+                
+                # 用 Linux 的 && 串聯所有管理員指令，達成一氣呵成的批次解除安裝
+                uninstall_cmd = " && ".join(cmd_list)
+                self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
+                
+                # 🧹 任務升空後，立刻清空緩存，回復乾淨狀態
+                self.selected_packages.clear()
+                self.clear_notifications()
+                
+            # 🎯 分流 B：清單是空的，退回原本高精準度的「單一套件移除」邏輯
+            elif table.cursor_coordinate:
+                row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+                row_data = table.get_row(row_key)
                 
                 raw_mgr = clean_markup(row_data[0])
                 package_name = clean_markup(row_data[1])
                 
                 self.notify(f"🚀 鍵盤觸發: 準備解除安裝 {raw_mgr.upper()} 套件: {package_name}...")
                 
-                # 🛠️ 根據來源判定刪除指令 (12 大通路終極支援)
                 if raw_mgr == "pacman": uninstall_cmd = f"sudo pacman -Rns {package_name}"
                 elif raw_mgr == "yay": uninstall_cmd = f"yay -Rns {package_name}"
                 elif raw_mgr == "paru": uninstall_cmd = f"paru -Rns {package_name}"
@@ -196,68 +290,49 @@ class LinuxPackageManagerApp(App):
                 elif raw_mgr == "flatpak": uninstall_cmd = f"flatpak uninstall -y {package_name}"
                 elif raw_mgr == "brew": uninstall_cmd = f"brew uninstall {package_name}"
                 else: return
-                
-                import shutil, subprocess, asyncio
-                
-                # 🚀 自動偵測桌面環境可用的終端機
-                terminal_cmd = None
-                for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    if shutil.which(term) is not None:
-                        terminal_cmd = term
-                        break
-                
-                # 🛡️ 物理喚醒外部終端機執行卸載，並套用錯誤防護罩
+            
+            else:
+                return
+
+            # 🚀 物理喚醒外部終端機執行 (支援批次或單一指令)
+            import shutil, subprocess, asyncio
+            terminal_cmd = None
+            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                if shutil.which(term) is not None:
+                    terminal_cmd = term
+                    break
+            
+            try:
+                if terminal_cmd == "gnome-terminal":
+                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
+                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
+                else:
+                    subprocess.Popen(["bash", "-c", uninstall_cmd])
+            except Exception as e:
+                self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
+
+            # ⏳ 延遲刷新數據管線
+            async def delayed_refresh():
+                await asyncio.sleep(5)
                 try:
-                    if terminal_cmd == "gnome-terminal":
-                        subprocess.Popen(["gnome-terminal", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
-                    elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                        subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
-                    else:
-                        subprocess.Popen(["bash", "-c", uninstall_cmd])
-                except Exception as e:
-                    self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
-
-                # ⏳ 延遲刷新數據管線
-                async def delayed_refresh():
-                    await asyncio.sleep(5) # 給系統 5 秒卸載時間
-                    try:
-                        await self.load_installed_packages()
-                        self.notify("已安裝套件清單！")
-                    except Exception: pass
-                
-                asyncio.create_task(delayed_refresh())
-
+                    await self.load_installed_packages()
+                    self.notify("📦 已自動為您更新全通路套件清單！")
+                except Exception: pass
+            
+            asyncio.create_task(delayed_refresh())
+    
+    # 🐧 偵測目前的 Linux 發行版名稱
     def get_os_name(self) -> str:
-        """讀取系統 /etc/os-release 來獲取準確的 Linux 發行版名稱"""
         try:
-            import platform
-            if hasattr(platform, 'freedesktop_os_release'):
-                return platform.freedesktop_os_release().get('PRETTY_NAME', 'Linux')
-        except Exception: pass
-        
-        try:
-            with open("/etc/os-release") as f:
+            with open("/etc/os-release", "r") as f:
                 for line in f:
                     if line.startswith("PRETTY_NAME="):
+                        # 抓出 PRETTY_NAME="Ubuntu 24.04 LTS" 裡面的字串
                         return line.split("=")[1].strip().strip('"')
-        except Exception: pass
-        return "未知 Linux 發行版"
-
-
-    def parse_size_to_bytes(self, size_str: str) -> float:
-        clean_str = size_str.replace("[bold #e0af68]", "").replace("[/bold #e0af68]", "")
-        clean_str = clean_str.replace("[b white on #ff5555]", "").replace("[/b white on #ff5555]", "").strip().lower()
-        if "未知" in clean_str or not clean_str: return 0.0
-        try:
-            parts = clean_str.split()
-            number = float(parts[0])
-            unit = parts[1] if len(parts) > 1 else ""
-            if "tb" in unit or "t" == unit: return number * (1024 ** 4)
-            elif "gb" in unit or "g" == unit: return number * (1024 ** 3)
-            elif "mb" in unit or "m" == unit: return number * (1024 ** 2)
-            elif "kb" in unit or "k" in unit: return number * 1024
-            return number
-        except Exception: return 0.0
+            return "Unknown Linux"
+        except Exception:
+            return "Unknown OS"
 
     def get_disk_info(self) -> str:
         try:
