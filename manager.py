@@ -444,18 +444,48 @@ class LinuxPackageManagerApp(App):
         current_keyword = self.query_one("#pkg-input").value if hasattr(self, 'query_one') else ""
         self.refresh_table_view(highlight_keyword=current_keyword, sort_by=self.current_sort)
 
-    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
-        if event.column_index == 1:
-            self.current_sort = "name"
-        elif event.column_index == 2:
-            self.current_sort = "group"
-        elif event.column_index == 4:
-            self.current_sort = "size"
-        else:
+    # 🎯 點擊表頭排序的核心觸發區 (Textual 原生極速渲染版)
+    def on_data_table_header_selected(self, event: __import__("textual").widgets.DataTable.HeaderSelected) -> None:
+        try:
+            table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
+        except Exception:
             return
 
-        self.sort_descending = not self.sort_descending
-        self.refresh_table_view(sort_by=self.current_sort)
+        # 1. 切換正反向 (預設為 False)
+        self.sort_descending = not getattr(self, "sort_descending", False)
+        
+        # 2. 專屬容量轉換器 (把字串換算成純數字)
+        def parse_size(size_str):
+            import re
+            # 清除可能殘留的顏色標籤，並轉大寫
+            clean_str = re.sub(r'\[.*?\]', '', str(size_str)).upper().strip()
+            try:
+                if "GB" in clean_str: return float(clean_str.replace("GB", "").strip()) * 1024 * 1024 * 1024
+                if "MB" in clean_str: return float(clean_str.replace("MB", "").strip()) * 1024 * 1024
+                if "KB" in clean_str: return float(clean_str.replace("KB", "").strip()) * 1024
+                if "B" in clean_str: return float(clean_str.replace("B", "").strip())
+                return 0.0 # 遇到沙盒管理等文字直接墊底
+            except:
+                return 0.0
+
+        # 3. 呼叫 Textual 底層原生排序 (完全不經過 refresh_table_view，零延遲！)
+        try:
+            if event.column_index == 4:
+                # 佔用容量：套用專屬的數字轉換器
+                table.sort(event.column_key, reverse=self.sort_descending, key=parse_size)
+            else:
+                # 其他純文字欄位：清除標籤後直接按字母排序
+                def clean_text(text):
+                    import re
+                    return re.sub(r'\[.*?\]', '', str(text)).lower().strip()
+                table.sort(event.column_key, reverse=self.sort_descending, key=clean_text)
+                
+            # 給一個非常低調且 1 秒就會消失的提示，證明它有在做事
+            self.notify("✨ 列表已重新排序", timeout=1)
+            
+        except Exception as e:
+            # 如果真的有錯，強制把錯誤印在畫面上讓我們抓兇手
+            self.notify(f"❌ 排序失敗: {str(e)}", severity="error", timeout=5)
 
     async def load_installed_packages(self) -> None:
         try:
@@ -562,17 +592,38 @@ class LinuxPackageManagerApp(App):
             filtered.append(pkg)
     
         def sort_key(x):
-            is_priority = 1 if x.get("manager") == self.current_priority_manager else 0
-            current_sort_target = self.current_sort if hasattr(self, 'current_sort') else sort_by
-            if current_sort_target == "size":
-                secondary = self.parse_size_to_bytes(x.get("size", ""))
-            elif current_sort_target == "group":
-                secondary = x.get("group", "system").lower()
+            # 1. 管理員優先權
+            priority_mgr = getattr(self, "current_priority_manager", None)
+            is_priority = 1 if x.get("manager") == priority_mgr else 0
+            
+            # 2. 確定目前的排序目標
+            target = getattr(self, "current_sort", sort_by)
+            
+            # ⚖️ 容量排序邏輯
+            if target == "size":
+                size_str = str(x.get("size", "0")).upper()
+                try:
+                    # 內建無敵轉型，把 MB, GB 換算成最基礎的 Bytes 數字來比大小！
+                    if "GB" in size_str: val = float(size_str.replace("GB", "").strip()) * 1024 * 1024 * 1024
+                    elif "MB" in size_str: val = float(size_str.replace("MB", "").strip()) * 1024 * 1024
+                    elif "KB" in size_str: val = float(size_str.replace("KB", "").strip()) * 1024
+                    elif "B" in size_str: val = float(size_str.replace("B", "").strip())
+                    else: val = 0.0 # 遇到 "沙盒管理" 這類純文字，乖乖變成 0 墊底
+                except Exception:
+                    val = 0.0
+                return (is_priority, val)
+                
+            # 📁 群組排序邏輯
+            elif target == "group":
+                return (is_priority, str(x.get("group", "System")).lower())
+                
+            # 📦 來源排序邏輯
+            elif target == "manager":
+                return (is_priority, str(x.get("manager", "")).lower())
+                
+            # 🔤 預設名稱排序邏輯
             else:
-                secondary = x.get("name", "").lower()
-            return (is_priority, secondary)
-
-        filtered.sort(key=sort_key, reverse=self.sort_descending)
+                return (is_priority, str(x.get("name", "")).lower())
 
         # 4. 畫出符合條件的套件
         for pkg in filtered:
