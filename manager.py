@@ -10,6 +10,7 @@ from textual.widgets import Header, Footer, Input, Markdown, Label, DataTable, O
 from textual.widgets.option_list import Option
 from textual.screen import ModalScreen
 from morefunction import ThemeMenuScreen
+from modals import BatchActionModal
 
 # ================= 1. Gemini AI 模組 =================
 class GeminiExplainer:
@@ -814,14 +815,28 @@ class LinuxPackageManagerApp(App):
                 # 🚀 效率核心：精準引入步驟，確保 SettingsScreen 類別絕對被正確呼叫
                 from morefunction import SettingsScreen
                 
-                def apply_settings_callback(saved_token: str) -> None:
-                    if saved_token is not None:  # 使用者按了儲存
-                        self.current_gemini_token = saved_token
-                        self.ai.refresh_client(saved_token)  # 重新初始化 AI 大腦
-                        if saved_token:
-                            self.notify("⚙️ Gemini API 金鑰儲存成功，AI 功能已全面上線！")
-                        else:
-                            self.notify("⚠️ 金鑰已清空，AI 解說功能將暫時關閉", severity="warning")
+                def apply_settings_callback(settings_data: dict | None) -> None:
+                    if settings_data is not None: # 使用者按了儲存
+                    # 1. 拆包裹：拿出引擎和 Token
+                        selected_engine = settings_data.get("ai_engine", "gemini")
+                    new_token = settings_data.get("api_token", "").strip()
+                    
+                    # 2. 把設定存進主程式變數裡 (未來可以靠這個變數去切換不同 AI 的 API)
+                    self.current_ai_engine = selected_engine
+                    self.current_gemini_token = new_token
+                    
+                    # 3. 把「純字串」的 Token 丟給大腦重新初始化 (就不會再報錯了！)
+                    try:
+                        self.ai.refresh_client(new_token)
+                    except Exception as e:
+                        self.notify(f"❌ AI 初始化失敗: {str(e)}", severity="error")
+                        return
+
+                    # 4. 根據有沒有輸入 Token 給予不同的提示
+                    if new_token:
+                        self.notify(f"⚙️ {selected_engine.upper()} 引擎已切換，金鑰儲存成功！")
+                    else:
+                        self.notify(f"⚠️ 已切換至 {selected_engine.upper()}，但您尚未輸入 API 金鑰哦！", severity="warning")
 
                 # 物理彈出輸入框視窗
                 self.push_screen(SettingsScreen(self.current_gemini_token), apply_settings_callback)
@@ -882,144 +897,6 @@ class LinuxPackageManagerApp(App):
         except Exception:
             pass # 找不到表格時（例如正在子視窗）安全靜默跳出，不拋出紅字  
             
-
-        # 🚀 全新打造：批次大量安裝/刪除的彈出式魔法視窗
-# 🚀 全新打造：批次大量安裝/刪除的彈出式魔法視窗 (CSS 修正版)
-class BatchActionModal(__import__("textual").screen.ModalScreen):
-    
-    # 🎨 Textual 專屬的魔法：把所有樣式集中在這裡統一管理！
-    CSS = """
-    BatchActionModal {
-        align: center middle;
-    }
-    #batch-modal-container {
-        padding: 1 2;
-        background: #1a1b26;
-        border: thick #7aa2f7;
-        width: 60;
-        height: auto;
-    }
-    .spacing-bottom {
-        margin-bottom: 1;
-    }
-    #batch-action-set {
-        border: none;
-        margin-bottom: 1;
-    }
-    #button-container {
-        height: auto;
-        align: right middle;
-    }
-    #batch-cancel {
-        margin-right: 2;
-    }
-    """
-
-    def __init__(self, main_app, **kwargs):
-        super().__init__(**kwargs)
-        self.main_app = main_app
-
-    def compose(self) -> __import__("textual").app.ComposeResult:
-        from textual.containers import Vertical, Horizontal
-        from textual.widgets import Label, Input, RadioSet, RadioButton, Button
-
-        # 🧱 乾淨俐落的結構區塊 (移除了所有會引發報錯的 style 參數)
-        with Vertical(id="batch-modal-container"):
-            yield Label("[bold #7aa2f7]🔮 終極多通路批次處理中心[/]", classes="spacing-bottom")
-            yield Label("請輸入套件名稱 (支援多個，請以[bold #e0af68]英文逗號[/]分隔)：")
-            
-            yield Input(placeholder="範例: hyfetch, kde, linux", id="batch-pkg-input", classes="spacing-bottom")
-            
-            yield Label("請選擇執行動作：")
-            with RadioSet(id="batch-action-set"):
-                yield RadioButton("📥 大量批次安裝", value=True, id="radio-install")
-                yield RadioButton("🗑️ 大量批次移除", id="radio-uninstall")
-            
-            with Horizontal(id="button-container"):
-                yield Button("取消", variant="error", id="batch-cancel")
-                yield Button("確認發射 🚀", variant="success", id="batch-confirm")
-
-    # 🎯 捕捉視窗內按鈕點擊事件 (邏輯跟剛剛完全一樣，保持不變)
-    def on_button_pressed(self, event: __import__("textual").widgets.Button.Pressed) -> None:
-        if event.button.id == "batch-cancel":
-            self.dismiss()
-            return
-
-        if event.button.id == "batch-confirm":
-            input_value = self.query_one("#batch-pkg-input").value.strip()
-            
-            if not input_value:
-                self.main_app.notify("❌ 請至少輸入一個套件名稱！", severity="error")
-                return
-
-            raw_packages = [p.strip() for p in input_value.split(",") if p.strip()]
-            
-            is_install = self.query_one("#radio-install").value
-            action_word = "安裝" if is_install else "解除安裝"
-            
-            self.main_app.notify(f"⚡ 正在建構 {len(raw_packages)} 個套件的批次{action_word}指令...")
-
-            import shutil
-            mgr = "apt"
-            for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
-                if shutil.which(test_mgr) is not None:
-                    mgr = test_mgr
-                    break
-
-            pkgs_str = " ".join(raw_packages)
-            uninstall_cmd = ""
-            
-            if is_install:
-                if mgr in ["pacman", "yay"]: uninstall_cmd = f"sudo {mgr} -S --noconfirm {pkgs_str}"
-                elif mgr == "apt": uninstall_cmd = f"sudo apt install -y {pkgs_str}"
-                elif mgr == "dnf": uninstall_cmd = f"sudo dnf install -y {pkgs_str}"
-                elif mgr == "zypper": uninstall_cmd = f"sudo zypper install -y {pkgs_str}"
-                elif mgr == "apk": uninstall_cmd = f"sudo apk add {pkgs_str}"
-            else:
-                if mgr in ["pacman", "yay"]: uninstall_cmd = f"sudo {mgr} -Rns --noconfirm {pkgs_str}"
-                elif mgr == "apt": uninstall_cmd = f"sudo apt purge -y {pkgs_str}"
-                elif mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {pkgs_str}"
-                elif mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {pkgs_str}"
-                elif mgr == "apk": uninstall_cmd = f"sudo apk del {pkgs_str}"
-
-            terminal_cmd = None
-            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                if shutil.which(term) is not None:
-                    terminal_cmd = term
-                    break
-            
-            proc = None # 💡 用來綁定行程的變數
-            try:
-                if terminal_cmd == "gnome-terminal":
-                    # 🌟 關鍵修復：加上 --wait 參數，強制叫 gnome-terminal 沒關閉前不准釋放行程！
-                    proc = __import__("subprocess").Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
-                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    proc = __import__("subprocess").Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
-                else:
-                    proc = __import__("subprocess").Popen(["bash", "-c", uninstall_cmd])
-            except Exception as e:
-                self.main_app.notify(f"❌ 啟動批次程序失敗: {str(e)}", severity="error")
-
-            # 先行關閉密技彈出視窗
-            self.dismiss()
-            
-            # 🎯 【主動防禦型精準監聽管線】
-            if proc is not None:
-                async def exact_refresh():
-                    # ⏳ 核心黑魔法：利用 asyncio.to_thread 讓 proc.wait() 在背景線程死守等待，
-                    # 這樣絕對不會卡死你的主程式 UI 畫面！
-                    await __import__("asyncio").to_thread(proc.wait)
-                    
-                    # 當程式走到下一行，代表外部終端機視窗已經被「確確實實地關閉了」！
-                    try:
-                        await self.main_app.load_installed_packages()
-                        self.main_app.notify("📦 偵測到終端機已關閉，套件清單已完成即時同步！")
-                    except Exception: 
-                        pass
-                
-                # 扣下背景任務的扳機
-                __import__("asyncio").create_task(exact_refresh())
-
 if __name__ == "__main__":
     app = LinuxPackageManagerApp()
     app.run()
