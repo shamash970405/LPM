@@ -10,6 +10,7 @@ from textual.widgets import Header, Footer, Input, Markdown, Label, DataTable, O
 from textual.widgets.option_list import Option
 from textual.screen import ModalScreen
 from morefunction import ThemeMenuScreen
+from morefunction import SettingsScreen
 from modals import BatchActionModal
 
 # ================= 1. Gemini AI 模組 =================
@@ -795,54 +796,42 @@ class LinuxPackageManagerApp(App):
             self.query_one("#pkg-input", Input).focus()
 
     def action_open_esc_menu(self) -> None:
-        def handle_esc_callback(action: str) -> None:
-            if action == "change_theme":
-                def apply_theme_callback(theme_name: str) -> None:
-                    if theme_name:
-                        try:
-                            self.theme_mgr.change_theme(theme_name)
-                            self.app.css = self.theme_mgr.get_css()
-                            self.refresh()
-                            self.notify(f"🎨 佈景主題已成功切換至：{theme_name.upper()}")
-                        except Exception as e:
-                            self.notify(f"⚠️ 主題套用失敗：{str(e)}", severity="error")
-                try:
-                    self.push_screen(ThemeMenuScreen(), apply_theme_callback)
-                except Exception as e:
-                    self.notify(f"⚠️ 無法加載主題選單：{str(e)}", severity="error")
-                    
-            elif action == "open_settings":
-                # 🚀 效率核心：精準引入步驟，確保 SettingsScreen 類別絕對被正確呼叫
-                from morefunction import SettingsScreen
-                
+       # 🎯 處理 Esc 選單的點擊回呼
+        def handle_esc_callback(action: str | None) -> None:
+            # 1. 如果使用者按了 Esc 或點擊旁邊取消，action 會是 None，直接略過
+            if not action:
+                return
+
+            # 2. 判斷接收到的字串
+            if action == "open_settings":
                 def apply_settings_callback(settings_data: dict | None) -> None:
-                    if settings_data is not None: # 使用者按了儲存
-                    # 1. 拆包裹：拿出引擎和 Token
+                    if settings_data is not None:
                         selected_engine = settings_data.get("ai_engine", "gemini")
-                    new_token = settings_data.get("api_token", "").strip()
-                    
-                    # 2. 把設定存進主程式變數裡 (未來可以靠這個變數去切換不同 AI 的 API)
-                    self.current_ai_engine = selected_engine
-                    self.current_gemini_token = new_token
-                    
-                    # 3. 把「純字串」的 Token 丟給大腦重新初始化 (就不會再報錯了！)
-                    try:
-                        self.ai.refresh_client(new_token)
-                    except Exception as e:
-                        self.notify(f"❌ AI 初始化失敗: {str(e)}", severity="error")
-                        return
+                        new_token = settings_data.get("api_token", "").strip()
+                        
+                        self.current_ai_engine = selected_engine
+                        self.current_gemini_token = new_token
+                        
+                        try:
+                            self.ai.refresh_client(new_token)
+                        except Exception as e:
+                            self.notify(f"❌ AI 初始化失敗: {str(e)}", severity="error")
+                            return
 
-                    # 4. 根據有沒有輸入 Token 給予不同的提示
-                    if new_token:
-                        self.notify(f"⚙️ {selected_engine.upper()} 引擎已切換，金鑰儲存成功！")
-                    else:
-                        self.notify(f"⚠️ 已切換至 {selected_engine.upper()}，但您尚未輸入 API 金鑰哦！", severity="warning")
+                        if new_token:
+                            self.notify(f"⚙️ {selected_engine.upper()} 引擎已切換，金鑰儲存成功！")
+                        else:
+                            self.notify(f"⚠️ 已切換至 {selected_engine.upper()}，但您尚未輸入 API 金鑰哦！", severity="warning")
 
-                # 物理彈出輸入框視窗
-                self.push_screen(SettingsScreen(self.current_gemini_token), apply_settings_callback)
+                # 💡 注意：請確保你的 manager.py 最上方有寫 `from morefunction import SettingsScreen`
+                self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", "")), apply_settings_callback)
 
             elif action == "quit":
                 self.exit()
+
+            # 🚨 3. 抓漏神器：如果收到不在預期內的指令，直接印在畫面上！
+            else:
+                self.notify(f"❌ 選單指令對不上：未知的 action '{action}'", severity="error")
                 
         self.push_screen(EscMenuScreen(), handle_esc_callback)
 
