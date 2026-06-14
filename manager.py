@@ -165,6 +165,14 @@ class LinuxPackageManagerApp(App):
             if not (self.focused and getattr(self.focused, "id", None) == "pkg-input"):
                 self.exit()
                 return
+        
+        if event.key.lower() == "z":
+            # 🛡️ 焦點檢查：如果游標「在」搜尋輸入框裡，不要攔截，放行讓使用者可以正常打出 "z" 鍵！
+            if self.focused and getattr(self.focused, "id", None) == "pkg-input":
+                return
+            # 🚀 游標在外面時，直接將批次視窗推進渲染層！
+            self.push_screen(BatchActionModal(main_app=self))
+            return
 
         # 🧰 初始化動態選擇清單 (防護罩：避免動到 __init__)
         if not hasattr(self, "selected_packages"):
@@ -302,25 +310,33 @@ class LinuxPackageManagerApp(App):
                     terminal_cmd = term
                     break
             
+            proc = None  # 💡 用來綁定行程的變數
             try:
                 if terminal_cmd == "gnome-terminal":
-                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
+                    # 🌟 關鍵修復：加上 --wait 參數，強制叫 gnome-terminal 沒關閉前不准釋放行程！
+                    proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
                 elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
+                    proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
                 else:
-                    subprocess.Popen(["bash", "-c", uninstall_cmd])
+                    proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
             except Exception as e:
                 self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
 
-            # ⏳ 延遲刷新數據管線
-            async def delayed_refresh():
-                await asyncio.sleep(5)
-                try:
-                    await self.load_installed_packages()
-                    self.notify("📦 已自動為您更新全通路套件清單！")
-                except Exception: pass
-            
-            asyncio.create_task(delayed_refresh())
+            # 🎯 【主程式專屬：主動防禦型精準監聽管線】
+            if proc is not None:
+                async def exact_refresh():
+                    # ⏳ 在背景線程死守等待終端機行程結束，絕對不卡死 LPM 畫面
+                    await asyncio.to_thread(proc.wait)
+                    
+                    # 當使用者在終端機按下 Enter 讓視窗消失的瞬間，精準觸發刷新！
+                    try:
+                        await self.load_installed_packages()
+                        self.notify("📦 偵測到刪除程序完成，套件清單已即時同步！")
+                    except Exception: 
+                        pass
+                
+                # 扣下背景監聽任務的扳機
+                asyncio.create_task(exact_refresh())
     
     # 🐧 偵測目前的 Linux 發行版名稱
     def get_os_name(self) -> str:
@@ -813,7 +829,145 @@ class LinuxPackageManagerApp(App):
                 asyncio.create_task(delayed_refresh())
 
         except Exception:
-            pass # 找不到表格時（例如正在子視窗）安全靜默跳出，不拋出紅字   
+            pass # 找不到表格時（例如正在子視窗）安全靜默跳出，不拋出紅字  
+            
+
+        # 🚀 全新打造：批次大量安裝/刪除的彈出式魔法視窗
+# 🚀 全新打造：批次大量安裝/刪除的彈出式魔法視窗 (CSS 修正版)
+class BatchActionModal(__import__("textual").screen.ModalScreen):
+    
+    # 🎨 Textual 專屬的魔法：把所有樣式集中在這裡統一管理！
+    CSS = """
+    BatchActionModal {
+        align: center middle;
+    }
+    #batch-modal-container {
+        padding: 1 2;
+        background: #1a1b26;
+        border: thick #7aa2f7;
+        width: 60;
+        height: auto;
+    }
+    .spacing-bottom {
+        margin-bottom: 1;
+    }
+    #batch-action-set {
+        border: none;
+        margin-bottom: 1;
+    }
+    #button-container {
+        height: auto;
+        align: right middle;
+    }
+    #batch-cancel {
+        margin-right: 2;
+    }
+    """
+
+    def __init__(self, main_app, **kwargs):
+        super().__init__(**kwargs)
+        self.main_app = main_app
+
+    def compose(self) -> __import__("textual").app.ComposeResult:
+        from textual.containers import Vertical, Horizontal
+        from textual.widgets import Label, Input, RadioSet, RadioButton, Button
+
+        # 🧱 乾淨俐落的結構區塊 (移除了所有會引發報錯的 style 參數)
+        with Vertical(id="batch-modal-container"):
+            yield Label("[bold #7aa2f7]🔮 終極多通路批次處理中心[/]", classes="spacing-bottom")
+            yield Label("請輸入套件名稱 (支援多個，請以[bold #e0af68]英文逗號[/]分隔)：")
+            
+            yield Input(placeholder="範例: hyfetch, kde, linux", id="batch-pkg-input", classes="spacing-bottom")
+            
+            yield Label("請選擇執行動作：")
+            with RadioSet(id="batch-action-set"):
+                yield RadioButton("📥 大量批次安裝", value=True, id="radio-install")
+                yield RadioButton("🗑️ 大量批次移除", id="radio-uninstall")
+            
+            with Horizontal(id="button-container"):
+                yield Button("取消", variant="error", id="batch-cancel")
+                yield Button("確認發射 🚀", variant="success", id="batch-confirm")
+
+    # 🎯 捕捉視窗內按鈕點擊事件 (邏輯跟剛剛完全一樣，保持不變)
+    def on_button_pressed(self, event: __import__("textual").widgets.Button.Pressed) -> None:
+        if event.button.id == "batch-cancel":
+            self.dismiss()
+            return
+
+        if event.button.id == "batch-confirm":
+            input_value = self.query_one("#batch-pkg-input").value.strip()
+            
+            if not input_value:
+                self.main_app.notify("❌ 請至少輸入一個套件名稱！", severity="error")
+                return
+
+            raw_packages = [p.strip() for p in input_value.split(",") if p.strip()]
+            
+            is_install = self.query_one("#radio-install").value
+            action_word = "安裝" if is_install else "解除安裝"
+            
+            self.main_app.notify(f"⚡ 正在建構 {len(raw_packages)} 個套件的批次{action_word}指令...")
+
+            import shutil
+            mgr = "apt"
+            for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
+                if shutil.which(test_mgr) is not None:
+                    mgr = test_mgr
+                    break
+
+            pkgs_str = " ".join(raw_packages)
+            uninstall_cmd = ""
+            
+            if is_install:
+                if mgr in ["pacman", "yay"]: uninstall_cmd = f"sudo {mgr} -S --noconfirm {pkgs_str}"
+                elif mgr == "apt": uninstall_cmd = f"sudo apt install -y {pkgs_str}"
+                elif mgr == "dnf": uninstall_cmd = f"sudo dnf install -y {pkgs_str}"
+                elif mgr == "zypper": uninstall_cmd = f"sudo zypper install -y {pkgs_str}"
+                elif mgr == "apk": uninstall_cmd = f"sudo apk add {pkgs_str}"
+            else:
+                if mgr in ["pacman", "yay"]: uninstall_cmd = f"sudo {mgr} -Rns --noconfirm {pkgs_str}"
+                elif mgr == "apt": uninstall_cmd = f"sudo apt purge -y {pkgs_str}"
+                elif mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {pkgs_str}"
+                elif mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {pkgs_str}"
+                elif mgr == "apk": uninstall_cmd = f"sudo apk del {pkgs_str}"
+
+            terminal_cmd = None
+            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                if shutil.which(term) is not None:
+                    terminal_cmd = term
+                    break
+            
+            proc = None # 💡 用來綁定行程的變數
+            try:
+                if terminal_cmd == "gnome-terminal":
+                    # 🌟 關鍵修復：加上 --wait 參數，強制叫 gnome-terminal 沒關閉前不准釋放行程！
+                    proc = __import__("subprocess").Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
+                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    proc = __import__("subprocess").Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
+                else:
+                    proc = __import__("subprocess").Popen(["bash", "-c", uninstall_cmd])
+            except Exception as e:
+                self.main_app.notify(f"❌ 啟動批次程序失敗: {str(e)}", severity="error")
+
+            # 先行關閉密技彈出視窗
+            self.dismiss()
+            
+            # 🎯 【主動防禦型精準監聽管線】
+            if proc is not None:
+                async def exact_refresh():
+                    # ⏳ 核心黑魔法：利用 asyncio.to_thread 讓 proc.wait() 在背景線程死守等待，
+                    # 這樣絕對不會卡死你的主程式 UI 畫面！
+                    await __import__("asyncio").to_thread(proc.wait)
+                    
+                    # 當程式走到下一行，代表外部終端機視窗已經被「確確實實地關閉了」！
+                    try:
+                        await self.main_app.load_installed_packages()
+                        self.main_app.notify("📦 偵測到終端機已關閉，套件清單已完成即時同步！")
+                    except Exception: 
+                        pass
+                
+                # 扣下背景任務的扳機
+                __import__("asyncio").create_task(exact_refresh())
 
 if __name__ == "__main__":
     app = LinuxPackageManagerApp()
