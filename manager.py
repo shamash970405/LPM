@@ -420,7 +420,7 @@ class LinuxPackageManagerApp(App):
     def on_click(self, event: __import__("textual").events.Click) -> None:
         # 🎯 透過 event.control 安全撈取觸發點擊的組件
         if hasattr(event, "control") and event.control:
-            target_id = event.control.idq
+            target_id = event.control.id
         else:
             return  # 如果點到空白處、沒有組件控制權，直接安全跳出
         
@@ -444,7 +444,7 @@ class LinuxPackageManagerApp(App):
             
         # 🚀 帶著搜尋框關鍵字，滿血洗牌刷新 5 欄位表格！
         current_keyword = self.query_one("#pkg-input").value if hasattr(self, 'query_one') else ""
-        self.refresh_table_view(highlight_keyword=current_keyword, sort_by=self.current_sort)
+        self.refresh_table_view(search_text=current_keyword, sort_by=self.current_sort)
 
     # 🎯 點擊表頭排序的核心觸發區 (Textual 原生極速渲染版)
     def on_data_table_header_selected(self, event: __import__("textual").widgets.DataTable.HeaderSelected) -> None:
@@ -653,27 +653,6 @@ class LinuxPackageManagerApp(App):
                 f"[bold #e0af68]{pkg_size}[/]"       # 🟠 容量：橘黃色
             )
 
-        for p in filtered:
-            pkg_manager = p.get("manager", "unknown")
-            pkg_name = p.get("name", "unknown")
-            pkg_version = p.get("version", "unknown")
-            pkg_size = p.get("size", "N/A")
-            
-            app_group = p.get("group", "System")
-            if "gnome" in pkg_name.lower() or "gtk" in pkg_name.lower():
-                app_group = "GNOME"
-            elif "kde" in pkg_name.lower() or "qt" in pkg_name.lower():
-                app_group = "KDE"
-            elif pkg_name in ["python3", "gcc", "git", "make"]:
-                app_group = "Development"
-
-            table.add_row(
-                f"[bold #e0af68]{pkg_manager}[/]",
-                pkg_name,
-                f"[bold #9ece6a]{app_group}[/]",
-                pkg_version,
-                f"[bold #e0af68]{pkg_size}[/]"
-            )
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         try:
