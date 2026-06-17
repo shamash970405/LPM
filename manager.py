@@ -2,7 +2,9 @@ import os
 import shutil
 import asyncio
 import subprocess
+import socket
 from google import genai
+from datetime import datetime
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from theme import ThemeManager
@@ -12,6 +14,7 @@ from textual.screen import ModalScreen
 from morefunction import ThemeMenuScreen
 from morefunction import SettingsScreen
 from modals import BatchActionModal
+from morefunction import ExportModal
 
 # ================= 1. Gemini AI 模組 =================
 class GeminiExplainer:
@@ -69,6 +72,7 @@ class EscMenuScreen(ModalScreen):
             yield OptionList(
                 Option("更改介面主題", id="change_theme"),
                 Option("⚙️ 系統設定 (API Token)", id="open_settings"),  # 🎯 就是缺了這一行！把它補上去！
+                Option("📤 匯出套件列表", id="export_list"),
                 Option("結束並退出程式", id="quit")
             )
 
@@ -653,7 +657,6 @@ class LinuxPackageManagerApp(App):
                 f"[bold #e0af68]{pkg_size}[/]"       # 🟠 容量：橘黃色
             )
 
-
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         try:
             table = self.query_one("#installed-packages-table", DataTable)
@@ -689,65 +692,43 @@ class LinuxPackageManagerApp(App):
         ai_response = await self.ai.ask_gemini(package_name)
         widget.update(ai_response)
 
+    # 🎯 捕捉輸入框改變事件 (內建防抖引擎)
     async def on_input_changed(self, event: __import__("textual").widgets.Input.Changed) -> None:
-        
-        # 確保觸發的是我們右上角的搜尋框
-        if event.input.id != "pkg-input":
+        # 確保是套件搜尋框觸發的
+        if getattr(event.input, "id", None) != "pkg-input":
             return
-
+            
         search_text = event.value.strip()
-
-        # 🛑 防抖核心 1：如果之前有正在「倒數」的查詢任務，立刻取消它！
-        # (代表使用者在 1 秒內又多打了字，所以舊的查詢作廢)
-        if self.ai_task is not None:
+        
+        # 🛑 防抖核心 1：取消上一次還沒執行的搜尋任務
+        if hasattr(self, "ai_task") and self.ai_task:
             self.ai_task.cancel()
-
-        # 如果使用者把輸入框清空了，就把右邊的 AI 面板恢復成預設狀態，然後跳出
+            
+        # 如果使用者把輸入框清空了，就直接恢復預設狀態並跳出
         if not search_text:
             try:
                 self.query_one("#ai-output").update("等待輸入中...")
-                self.refresh_table_view("") # 🎯 傳入空字串，恢復顯示所有套件
+                self.refresh_table_view("")
             except Exception: pass
             return
 
         # ⏳ 防抖核心 2：定義一個新的延遲查詢任務
         async def delayed_search():
+            import asyncio
+            await asyncio.sleep(0.3) # 停頓 0.3 秒，確認手指離開鍵盤了才動作
+            
+            self.notify(f"🔍 自動觸發搜尋: {search_text}")
+            
+            # 更新右邊的 AI 面板狀態
             try:
-                # 讓程式先「睡」1 秒鐘 (1.0 秒)
-                await asyncio.sleep(1.0)
-                self.notify(f"🔍 自動觸發查詢：{search_text}")
-                
-                # 1️⃣ 更新右邊的 AI 面板狀態
-                try:
-                    ai_panel = self.query_one("#ai-output")
-                    ai_panel.update(f"⏳ 正在幫您通靈 `{search_text}` 的資訊...")
-                except Exception: pass
-                self.refresh_table_view(search_text)
-
-                # 2️⃣ 在左下角表格中自動尋找並「高亮定位」
-                try:
-                    table = self.query_one("#installed-packages-table")
-                    # 取得目前表格中所有的 row key
-                    for row_key in table.rows:
-                        row_data = table.get_row(row_key)
-                        # 假設套件名稱在第二個欄位 (index 1)
-                        if search_text.lower() in str(row_data[1]).lower():
-                            # 算出這個 row 的 index 並移動游標過去 (帶有滑動動畫！)
-                            row_index = table.get_row_index(row_key)
-                            table.move_cursor(row=row_index, animate=True)
-                            break # 找到第一個就停止尋找
-                except Exception as e: pass
-
-                # 3️⃣ 呼叫你原本寫好的 Gemini API 函式！
-                # ⚠️ 這裡非常重要：請把 `your_gemini_function` 換成你程式裡真正用來呼叫 AI 的那個函式名稱！
-                # 例如： await self.get_gemini_explanation(search_text)
-                
-                # ⬆️ --------------------------------------------- ⬆️
-
-            except asyncio.CancelledError:
+                ai_panel = self.query_one("#ai-output")
+                ai_panel.update(f"⏳ 正在幫您過濾 '{search_text}' 的資訊...")
+            except Exception: 
                 pass
+                
+            self.refresh_table_view(search_text)
 
-        # 🚀 防抖核心 3：發射這個新的倒數任務，並把它存進 self.ai_task 變數裡
+        # 🚀 防抖核心 3：發射剛剛寫好的延遲任務
         import asyncio
         self.ai_task = asyncio.create_task(delayed_search())
 
@@ -804,6 +785,55 @@ class LinuxPackageManagerApp(App):
 
                 # 💡 注意：請確保你的 manager.py 最上方有寫 `from morefunction import SettingsScreen`
                 self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", "")), apply_settings_callback)
+
+                # 📤 處理匯出套件列表
+            elif action == "export_list":
+                def apply_export_callback(export_data: dict | None) -> None:
+                    if export_data is not None:
+                        file_path = export_data["path"]
+                        
+                        # 如果使用者把路徑清空了，給一個防呆預設值
+                        if not file_path:
+                            file_path = os.path.expanduser("~/lpm_packages.txt")
+                        # 如果使用者只輸入了資料夾路徑，自動幫他補上檔名
+                        elif os.path.isdir(file_path):
+                            file_path = os.path.join(file_path, "lpm_packages.txt")
+                        
+                        try:
+                            # 開始寫入檔案
+                            with open(file_path, "w", encoding="utf-8") as f:
+                                hostname = socket.gethostname()
+                                now = datetime.now().strftime("%Y/%m/%d  %H:%M") # 依照你的規格
+                                
+                                f.write(f"hostname:{hostname}\n")
+                                f.write(f"匯出時間:{now}\n\n")
+                                f.write("＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝\n")
+                                
+                                # 從畫面上最準確的 DataTable 抓取目前的資料
+                                table = self.query_one("#installed-packages-table")
+                                for row_key in table.rows:
+                                    row = table.get_row(row_key)
+                                    # 根據你的欄位：[0]來源, [1]名稱, [2]群組, [3]版本, [4]容量
+                                    mgr = str(row[0]).strip()
+                                    name = str(row[1]).strip()
+                                    version = str(row[3]).strip()
+                                    
+                                    # 根據勾選狀態組合字串
+                                    parts = []
+                                    if export_data["inc_mgr"]: parts.append(mgr)
+                                    parts.append(name)
+                                    if export_data["inc_version"]: parts.append(version)
+                                    
+                                    # 用斜線串聯並換行
+                                    f.write("/".join(parts) + "\n")
+                                    
+                            self.notify(f"✅ 匯出成功！檔案已儲存至：{file_path}", severity="info")
+                        except Exception as e:
+                            self.notify(f"❌ 匯出失敗：{str(e)}", severity="error")
+
+                # 彈出匯出設定視窗
+                self.push_screen(ExportModal(), apply_export_callback)
+
 
             elif action == "quit":
                 self.exit()
