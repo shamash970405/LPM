@@ -786,53 +786,87 @@ class LinuxPackageManagerApp(App):
                 # 💡 注意：請確保你的 manager.py 最上方有寫 `from morefunction import SettingsScreen`
                 self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", "")), apply_settings_callback)
 
-                # 📤 處理匯出套件列表
+            
+            # 📤 處理匯出套件列表
             elif action == "export_list":
+                # ✨ 終極卸妝水
+                def clean_text(raw_data):
+                    if hasattr(raw_data, "plain"):
+                        return raw_data.plain.strip()
+                    import re
+                    return re.sub(r'\[.*?\]', '', str(raw_data)).strip()
+
+                # 🌟 核心升級：在打開跳窗前，先把表格撈出來洗乾淨打包！
+                table = self.query_one("#installed-packages-table")
+                package_data = []
+                for row_key in table.rows:
+                    row = table.get_row(row_key)
+                    package_data.append({
+                        "mgr": clean_text(row[0]),
+                        "name": clean_text(row[1]),
+                        "version": clean_text(row[3])
+                    })
+
+                # 定義跳窗回傳後要執行的寫檔動作
                 def apply_export_callback(export_data: dict | None) -> None:
                     if export_data is not None:
                         file_path = export_data["path"]
+                        filter_text = export_data.get("filter_text", "").lower()
                         
-                        # 如果使用者把路徑清空了，給一個防呆預設值
                         if not file_path:
                             file_path = os.path.expanduser("~/lpm_packages.txt")
-                        # 如果使用者只輸入了資料夾路徑，自動幫他補上檔名
                         elif os.path.isdir(file_path):
                             file_path = os.path.join(file_path, "lpm_packages.txt")
                         
                         try:
-                            # 開始寫入檔案
                             with open(file_path, "w", encoding="utf-8") as f:
                                 hostname = socket.gethostname()
-                                now = datetime.now().strftime("%Y/%m/%d  %H:%M") # 依照你的規格
+                                now = datetime.now().strftime("%Y/%m/%d  %H:%M")
                                 
                                 f.write(f"hostname:{hostname}\n")
                                 f.write(f"匯出時間:{now}\n\n")
                                 f.write("＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝\n")
                                 
-                                # 從畫面上最準確的 DataTable 抓取目前的資料
-                                table = self.query_one("#installed-packages-table")
-                                for row_key in table.rows:
-                                    row = table.get_row(row_key)
-                                    # 根據你的欄位：[0]來源, [1]名稱, [2]群組, [3]版本, [4]容量
-                                    mgr = str(row[0]).strip()
-                                    name = str(row[1]).strip()
-                                    version = str(row[3]).strip()
-                                    
-                                    # 根據勾選狀態組合字串
-                                    parts = []
-                                    if export_data["inc_mgr"]: parts.append(mgr)
-                                    parts.append(name)
-                                    if export_data["inc_version"]: parts.append(version)
-                                    
-                                    # 用斜線串聯並換行
-                                    f.write("/".join(parts) + "\n")
-                                    
+                                # 🌟 寫檔時也直接使用剛剛打包好的 package_data
+                                all_packages = []
+                                for pkg in package_data:
+                                    # 寫入檔案前，一樣要把過濾掉的套件踢除
+                                    if filter_text and filter_text not in pkg["name"].lower():
+                                        continue
+                                    all_packages.append(pkg)
+                                
+                                from collections import defaultdict
+                                groups = defaultdict(list)
+                                for pkg in all_packages:
+                                    parts = pkg["name"].split("-", 1)
+                                    prefix = parts[0]
+                                    groups[prefix].append(pkg)
+                                
+                                for prefix in sorted(groups.keys()):
+                                    items = sorted(groups[prefix], key=lambda x: x["name"])
+                                    if len(items) == 1:
+                                        pkg = items[0]
+                                        line = pkg["name"]
+                                        if export_data["inc_version"]: line += f" ({pkg['version']})"
+                                        if export_data["inc_mgr"]: line = f"[{pkg['mgr']}] " + line
+                                        f.write(line + "\n")
+                                    else:
+                                        f.write(f"📁 {prefix}\n") 
+                                        for i, pkg in enumerate(items):
+                                            is_last = (i == len(items) - 1)
+                                            branch = "└── " if is_last else "├── "
+                                            suffix = pkg["name"][len(prefix)+1:] if pkg["name"] != prefix else "(核心本體)"
+                                            line = suffix
+                                            if export_data["inc_version"]: line += f" ({pkg['version']})"
+                                            if export_data["inc_mgr"]: line = f" [{pkg['mgr']}] " + line
+                                            f.write(f"{branch}{line}\n")
+                                            
                             self.notify(f"✅ 匯出成功！檔案已儲存至：{file_path}", severity="info")
                         except Exception as e:
                             self.notify(f"❌ 匯出失敗：{str(e)}", severity="error")
 
-                # 彈出匯出設定視窗
-                self.push_screen(ExportModal(), apply_export_callback)
+                # 🚀 最關鍵的一行：彈出匯出設定視窗，並把準備好的禮物 (package_data) 傳遞進去！
+                self.push_screen(ExportModal(package_data), apply_export_callback)
 
 
             elif action == "quit":
