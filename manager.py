@@ -100,7 +100,7 @@ class LinuxPackageManagerApp(App):
         # ✨ 終極殺招：用 Binding 物件並加上 priority=True，強勢覆蓋 DataTable 的隱藏設定！
         Binding("enter", "enter_action", "確認刪除", priority=True), 
         
-        ("z", "z_action", "批次處理中心"),      
+        ("z", "z_action", "批量安裝/卸載"),      
         ("ctrl+left", "resize_left_pane(-2)", "縮小左欄"),
         ("ctrl+right", "resize_left_pane(2)", "放大左欄"),
         ("ctrl+up", "resize_bottom_pane(1)", "放大下欄"),
