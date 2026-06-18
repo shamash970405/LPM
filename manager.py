@@ -120,23 +120,15 @@ class LinuxPackageManagerApp(App):
         super().__init__()
         self.ENABLE_COMMAND_PALETTE = False
         
-        from theme import ThemeManager 
-        self.theme_mgr = ThemeManager("tokyonight")
-        self.ai = GeminiExplainer()
-        self.current_gemini_token = os.environ.get("GEMINI_API_KEY", "")
-
-        # ✨ 關鍵修復：在這裡把新引擎實體化，介紹給主程式！
-        self.sys_info = SysInfo()
-        self.sys_status = self.sys_info.status
-
-        super().__init__()
-        self.ENABLE_COMMAND_PALETTE = False
-        
         # 🎨 初始化主題管理與 AI 模組
         from theme import ThemeManager 
         self.theme_mgr = ThemeManager("tokyonight")
         self.ai = GeminiExplainer()
         self.current_gemini_token = os.environ.get("GEMINI_API_KEY", "")
+
+        # ✨ 啟動獨立的系統資訊引擎
+        self.sys_info = SysInfo()
+        self.sys_status = self.sys_info.status
 
         # 📦 核心資料庫暫存區與排序狀態
         self.raw_packages = []
@@ -144,23 +136,7 @@ class LinuxPackageManagerApp(App):
         self.current_sort = "name"
         self.sort_descending = False
         self.current_priority_manager = "apt"  # 🎯 預設優先置頂 Ubuntu APT
-
-        # 全自動硬體環境偵測
-        # 🌍 終極全自動硬體環境偵測
-        self.sys_status = {
-            "pacman": shutil.which("pacman") is not None,  # Arch
-            "yay": shutil.which("yay") is not None,        # Arch (AUR)
-            "paru": shutil.which("paru") is not None,      # Arch (AUR 另一主流)
-            "apt": shutil.which("apt") is not None,        # Ubuntu/Debian
-            "dnf": shutil.which("dnf") is not None,        # Fedora/RHEL
-            "zypper": shutil.which("zypper") is not None,  # openSUSE
-            "apk": shutil.which("apk") is not None,        # Alpine Linux
-            "emerge": shutil.which("emerge") is not None,  # Gentoo
-            "xbps": shutil.which("xbps-install") is not None, # Void Linux
-            "snap": shutil.which("snap") is not None,      # 跨平台沙盒
-            "flatpak": shutil.which("flatpak") is not None,# 跨平台沙盒
-            "brew": shutil.which("brew") is not None       # Homebrew (Linuxbrew)
-        }
+        
         self.left_pane_width = 40
         self.bottom_pane_height = 60
         self.ai_task = None

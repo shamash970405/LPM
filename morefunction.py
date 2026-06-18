@@ -8,7 +8,6 @@ from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets.option_list import Option
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Label, OptionList, Input, Select, Button, Checkbox, TextArea
 from textual.widgets import Label, OptionList, Input, Select, Button, Checkbox, TextArea, RichLog
 
 # ================= 🎨 佈景主題切換跳窗 =================
