@@ -15,6 +15,7 @@ from morefunction import ThemeMenuScreen
 from morefunction import SettingsScreen
 from modals import BatchActionModal
 from morefunction import ExportModal
+from textual.binding import Binding
 from sys_info import SysInfo
 
 # ================= 1. Gemini AI 模組 =================
@@ -94,9 +95,12 @@ class LinuxPackageManagerApp(App):
         ("Q", "quit", "系統離開"),
         ("f1", "focus_search", "搜尋選中套件"),
         ("escape", "open_esc_menu", "系統選單"),
-        ("space", "do_nothing", "多選標記"),      
-        ("enter", "do_nothing", "確認刪除"),      
-        ("z", "do_nothing", "批次處理中心"),      
+        ("space", "space_action", "多選標記"),      
+        
+        # ✨ 終極殺招：用 Binding 物件並加上 priority=True，強勢覆蓋 DataTable 的隱藏設定！
+        Binding("enter", "enter_action", "確認刪除", priority=True), 
+        
+        ("z", "z_action", "批次處理中心"),      
         ("ctrl+left", "resize_left_pane(-2)", "縮小左欄"),
         ("ctrl+right", "resize_left_pane(2)", "放大左欄"),
         ("ctrl+up", "resize_bottom_pane(1)", "放大下欄"),
@@ -477,9 +481,11 @@ class LinuxPackageManagerApp(App):
         
         self.raw_packages = []
         tasks = []
-        if self.sys_status["pacman"]: tasks.append(self._scan_pacman())
-        if self.sys_status["apt"]: tasks.append(self._scan_apt())
-        if self.sys_status["snap"]: tasks.append(self._scan_snap())
+        if self.sys_status.get("pacman"): tasks.append(self._scan_pacman())
+        if self.sys_status.get("apt"): tasks.append(self._scan_apt())
+        if self.sys_status.get("snap"): tasks.append(self._scan_snap())
+        # ✨ 新增這行：如果系統有 Flatpak，就把它加入平行掃描任務中！
+        if self.sys_status.get("flatpak"): tasks.append(self._scan_flatpak())
 
         if tasks:
             await asyncio.gather(*tasks)
@@ -551,6 +557,33 @@ class LinuxPackageManagerApp(App):
                         version = parts[1]
                         self.raw_packages.append({"manager": "snap", "name": name, "version": version, "size": "沙盒管理"})
         except Exception: pass
+
+    async def _scan_flatpak(self):
+        try:
+            # 🚀 呼叫 flatpak list，並指定只輸出 Application ID 和 Version (以 tab 分隔)
+            process = await asyncio.create_subprocess_exec(
+                "flatpak", "list", "--columns=application,version", 
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                lines = stdout.decode().strip().split("\n")
+                for line in lines:
+                    if not line.strip(): 
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) >= 1:
+                        name = parts[0].strip()
+                        version = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "未知"
+                        # Flatpak 同樣是沙盒機制，容量計算較複雜，我們統一標示為沙盒管理
+                        self.raw_packages.append({
+                            "manager": "flatpak", 
+                            "name": name, 
+                            "version": version, 
+                            "size": "沙盒管理"
+                        })
+        except Exception: 
+            pass
 
     def refresh_table_view(self, search_text: str = "", sort_by: str = "size") -> None:
         try:
@@ -722,11 +755,16 @@ class LinuxPackageManagerApp(App):
         self.query_one("#bottom-pane").styles.height = f"{self.bottom_pane_height}%"
         self.query_one("#top-box").styles.height = f"{100 - self.bottom_pane_height}%"
 
-    def action_do_nothing(self) -> None:
-        """
-        這個函式只是一個空殼，用來讓 BINDINGS 的文字能顯示在最底下的 Footer。
-        真正的 Enter、Space、Z 鍵邏輯已經由 on_key 完美攔截並處理了！
-        """
+    def action_space_action(self) -> None:
+        """Space 的專屬空殼，真實邏輯在 on_key"""
+        pass
+
+    def action_enter_action(self) -> None:
+        """Enter 的專屬空殼，真實邏輯在 on_key"""
+        pass
+
+    def action_z_action(self) -> None:
+        """Z 鍵的專屬空殼，真實邏輯在 on_key"""
         pass
 
     def action_focus_search(self) -> None:
