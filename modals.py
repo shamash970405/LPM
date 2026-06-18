@@ -49,17 +49,21 @@ class TransFlagLoader(Static):
 
 # ================= 🔍 獨立的搜尋等待與樹狀選擇視窗 =================
 class SearchLoadingModal(ModalScreen):
-    """跨通路搜尋並提供樹狀選擇列表的載入畫面"""
+    """跨通路搜尋並提供樹狀選擇列表的載入畫面 (支援10秒略過與中斷接續)"""
     
     CSS = """
     SearchLoadingModal { align: center middle; background: rgba(0, 0, 0, 0.85); }
     #loader-container { width: 65; height: auto; max-height: 90%; background: #1f2335; border: thick #7aa2f7; padding: 2 4; align: center middle; }
+    
+    /* 動畫區塊 */
+    #anim-section { width: 100%; height: auto; align: center middle; margin-bottom: 1; }
     #flag-loader { content-align: center middle; margin-bottom: 1; }
     #loader-status { text-align: center; color: #e0af68; text-style: bold; margin-bottom: 1; }
+    #skip-box { width: 100%; height: auto; align: center middle; display: none; }
     
     /* 樹狀列表區域預設隱藏，搜尋完畢後顯示 */
     #tree-section { display: none; width: 100%; height: auto; margin-top: 1; }
-    #result-tree { height: 15; border: solid #565f89; background: #1a1b26; margin-bottom: 1; }
+    #result-tree { height: 18; border: solid #565f89; background: #1a1b26; margin-bottom: 1; }
     #tree-btn-box { height: auto; align: right middle; }
     #tree-cancel { margin-right: 2; }
     """
@@ -71,16 +75,20 @@ class SearchLoadingModal(ModalScreen):
         self.preferred_mgr = preferred_mgr
         self.is_install = is_install
         self.all_leaf_nodes = [] # 儲存所有可勾選的節點
+        self.resolved_dict = {}  # 跨次搜尋累計成功的套件字典
 
     def compose(self):
         with Vertical(id="loader-container"):
-            # 上半部：MTF 旗幟與狀態字
-            yield TransFlagLoader(id="flag-loader")
-            yield Label("尋找中.....wait a minute\n準備啟動引擎...", id="loader-status")
+            # 上半部：MTF 旗幟、狀態字與「略過按鈕」
+            with Vertical(id="anim-section"):
+                yield TransFlagLoader(id="flag-loader")
+                yield Label("尋找中.....wait a minute\n準備啟動引擎...", id="loader-status")
+                with Horizontal(id="skip-box"):
+                    yield Button("⏳ 略過長時間搜尋 (跳轉預覽)", id="btn-skip", variant="warning")
             
             # 下半部：隱藏的樹狀列表區域
             with Vertical(id="tree-section"):
-                yield Label("🔍 [bold #7aa2f7]搜尋完畢！[/]請從下方樹狀列表勾選 (點擊) 您要安裝的精確套件：", classes="section-title")
+                yield Label("🔍 [bold #7aa2f7]批次解析狀態[/] (可勾選所需項目)：", classes="section-title")
                 yield Tree("📦 跨通路搜尋結果", id="result-tree")
                 with Horizontal(id="tree-btn-box"):
                     yield Button("取消", id="tree-cancel", variant="error")
@@ -90,119 +98,238 @@ class SearchLoadingModal(ModalScreen):
         self.loader = self.query_one("#flag-loader")
         self.status_label = self.query_one("#loader-status")
         self.mgrs = ["apt", "snap", "flatpak"]
-        self.mgr_idx = 0
         
-        self.anim_timer = self.set_interval(0.1, self.update_progress)
-        self.search_task = asyncio.create_task(self.perform_search())
+        if self.is_install:
+            # 🚀 啟動可中斷的解析引擎
+            self.search_process_task = asyncio.create_task(self.run_search_process(self.raw_packages))
+        else:
+            self.search_process_task = asyncio.create_task(self.perform_uninstall())
 
     def update_progress(self):
         if self.loader.progress < 90:
             self.loader.progress += random.uniform(1, 3)
             
-        self.mgr_idx += 1
+        self.mgr_idx = getattr(self, "mgr_idx", 0) + 1
         current_mgr = self.mgrs[self.mgr_idx % len(self.mgrs)]
         self.status_label.update(f"尋找中.....wait a minute\n正在尋找 {current_mgr}")
 
-    async def perform_search(self):
+    def show_skip_btn(self):
+        # 10 秒後顯示略過按鈕
+        self.query_one("#skip-box").styles.display = "block"
+
+    async def fetch_all_managers(self, kw):
         sys_status = self.main_app.sys_status
+        tasks = []
+        
+        async def fetch_candidates(mgr_name, keyword):
+            try:
+                if mgr_name == "apt":
+                    proc = await asyncio.create_subprocess_shell(f"apt-cache search --names-only '{keyword}' | awk '{{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    return ("apt", [n for n in out.decode().strip().split('\n') if n])
+                elif mgr_name == "snap":
+                    proc = await asyncio.create_subprocess_shell(f"snap find '{keyword}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    return ("snap", [n for n in out.decode().strip().split('\n') if n and "No" not in n])
+                elif mgr_name == "flatpak":
+                    proc = await asyncio.create_subprocess_shell(f"flatpak search --columns=application '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    names = [n for n in out.decode().strip().split('\n') if n and "Application" not in n and "---" not in n]
+                    return ("flatpak", names)
+            except Exception: pass
+            return (mgr_name, [])
 
-        if self.is_install:
-            # 🚀 抓取多個候選名單 (Head -n 8 代表最多抓 8 個，避免列表太長)
-            async def fetch_candidates(mgr_name, kw):
+        if sys_status.get("apt"): tasks.append(fetch_candidates("apt", kw))
+        if sys_status.get("snap"): tasks.append(fetch_candidates("snap", kw))
+        if sys_status.get("flatpak"): tasks.append(fetch_candidates("flatpak", kw))
+
+        fetched_results = await asyncio.gather(*tasks)
+        return {mgr: names for mgr, names in fetched_results if names}
+
+    async def run_search_process(self, input_packages):
+        """核心解析引擎 (支援中斷、百萬防爆，以及來源保送高速通道)"""
+        self.query_one("#anim-section").styles.display = "block"
+        self.query_one("#tree-section").styles.display = "none"
+        self.query_one("#skip-box").styles.display = "none"
+        self.loader.progress = 0
+        self.mgr_idx = 0
+
+        self.anim_timer = self.set_interval(0.1, self.update_progress)
+        self.skip_timer = self.set_timer(10.0, self.show_skip_btn)
+
+        semaphore = asyncio.Semaphore(15)
+
+        async def safe_fetch(kw):
+            async with semaphore:
+                return await self.fetch_all_managers(kw)
+
+        # ✨ 高速保送通道：分類哪些需要搜、哪些可以直接保送！
+        keywords_to_search = []
+        for item in input_packages:
+            if isinstance(item, dict):
+                kw = item["name"]
+                mgr = item.get("mgr")
+                if mgr:
+                    # 🚀 VIP 保送！檔案裡已經有寫來源，直接存入成功清單，完全免搜尋！
+                    self.resolved_dict.setdefault(kw, {}).setdefault(mgr, []).append(kw)
+                else:
+                    keywords_to_search.append(kw)
+            else:
+                # 這是從「Z 鍵」手動輸入進來的純文字，沒有來源，乖乖去排隊搜尋
+                keywords_to_search.append(item)
+
+        # 建立每一個「需要搜尋的」關鍵字任務
+        self.search_tasks = {}
+        for kw in keywords_to_search:
+            self.search_tasks[kw] = asyncio.create_task(safe_fetch(kw))
+
+        # ⏳ 只等待那些沒有被保送、需要實際去系統查的任務
+        if self.search_tasks:
+            try:
+                await asyncio.wait(self.search_tasks.values(), return_when=asyncio.ALL_COMPLETED)
+            except asyncio.CancelledError:
+                pass 
+
+        self.skip_timer.stop()
+        self.anim_timer.stop()
+        self.loader.progress = 100
+
+        # 📊 結算成績單
+        unresolved = []
+        for kw, task in self.search_tasks.items():
+            if task.done() and not task.cancelled():
                 try:
-                    if mgr_name == "apt":
-                        proc = await asyncio.create_subprocess_shell(
-                            f"apt-cache search --names-only '{kw}' | awk '{{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
-                        out, _ = await proc.communicate()
-                        return ("apt", [n for n in out.decode().strip().split('\n') if n])
-                    
-                    elif mgr_name == "snap":
-                        proc = await asyncio.create_subprocess_shell(
-                            f"snap find '{kw}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
-                        out, _ = await proc.communicate()
-                        return ("snap", [n for n in out.decode().strip().split('\n') if n and "No" not in n])
-                    
-                    elif mgr_name == "flatpak":
-                        proc = await asyncio.create_subprocess_shell(
-                            f"flatpak search --columns=application '{kw}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
-                        out, _ = await proc.communicate()
-                        names = [n for n in out.decode().strip().split('\n') if n]
-                        names = [n for n in names if "Application" not in n and "---" not in n] # 過濾表頭
-                        return ("flatpak", names)
-                except Exception: pass
-                return (mgr_name, [])
+                    res = task.result()
+                    if res:
+                        # 合併搜尋回來的結果
+                        for found_mgr, found_pkgs in res.items():
+                            if found_pkgs:
+                                self.resolved_dict.setdefault(kw, {}).setdefault(found_mgr, []).extend(found_pkgs)
+                    else:
+                        unresolved.append(kw)
+                except Exception:
+                    unresolved.append(kw)
+            else:
+                unresolved.append(kw)
 
-            # 平行搜尋所有關鍵字
-            self.search_results = {}
-            for keyword in self.raw_packages:
-                tasks = []
-                if sys_status.get("apt"): tasks.append(fetch_candidates("apt", keyword))
-                if sys_status.get("snap"): tasks.append(fetch_candidates("snap", keyword))
-                if sys_status.get("flatpak"): tasks.append(fetch_candidates("flatpak", keyword))
+        await asyncio.sleep(0.5)
+        self.build_tree_ui(unresolved)
 
-                fetched_results = await asyncio.gather(*tasks)
-                self.search_results[keyword] = {mgr: names for mgr, names in fetched_results if names}
+    def build_tree_ui(self, unresolved):
+        """建立雙層狀態樹狀圖"""
+        self.query_one("#anim-section").styles.display = "none"
+        self.query_one("#tree-section").styles.display = "block"
+        
+        tree = self.query_one("#result-tree")
+        tree.clear()
+        self.all_leaf_nodes = []
 
-            # 搜尋完畢：停止動畫，填滿旗幟
-            self.anim_timer.stop()
-            self.loader.progress = 100
-            self.status_label.update("✅ 解析完畢！正在建立清單...")
-            await asyncio.sleep(0.6) 
-
-            # 💡 魔法時刻：隱藏狀態列，顯示樹狀圖！
-            self.query_one("#loader-status").styles.display = "none"
-            self.query_one("#tree-section").styles.display = "block"
+        # 🌲 上層：已解析成功
+        root_success = tree.root.add("✅ [bold #9ece6a]已解析成功[/] (勾選以直接安裝)", expand=True)
+        if not self.resolved_dict:
+            root_success.add_leaf("   (無)")
             
-            tree = self.query_one("#result-tree")
-            tree.root.expand()
+        for kw, mgrs in self.resolved_dict.items():
+            kw_node = root_success.add(f"🔑 關鍵字: [bold #e0af68]{kw}[/]", expand=True)
+            for mgr, pkgs in mgrs.items():
+                if not pkgs: continue
+                mgr_node = kw_node.add(f"📂 {mgr.upper()} 來源", expand=True)
+                for pkg in pkgs:
+                    leaf = mgr_node.add_leaf(f"[ ] {pkg}", data={"type": "install", "mgr": mgr, "display": pkg, "selected": False})
+                    self.all_leaf_nodes.append(leaf)
+                    # 智慧預設打勾
+                    if pkg == kw:
+                        leaf.data["selected"] = True
+                        leaf.set_label(f"[bold #9ece6a][X] {pkg}[/]")
+
+        # 🍂 下層：未解析或被中斷的項目
+        root_failed = tree.root.add("⏳ [bold #ff5555]未解析 / 尋找逾時[/] (勾選以繼續解析)", expand=True)
+        if not unresolved:
+            root_failed.add_leaf("   (無)")
             
-            # 建立樹狀結構
-            for kw, mgrs in self.search_results.items():
-                kw_node = tree.root.add(f"🔑 關鍵字: [bold #e0af68]{kw}[/]", expand=True)
-                
-                if not mgrs:
-                    kw_node.add_leaf("❌ 找不到相關套件")
-                    continue
+        for kw in unresolved:
+            leaf = root_failed.add_leaf(f"[ ] {kw}", data={"type": "reparse", "display": kw, "selected": False})
+            self.all_leaf_nodes.append(leaf)
+
+        tree.root.expand()
+
+    async def perform_uninstall(self):
+        # ... (保留原本的卸載邏輯) ...
+        await asyncio.sleep(0.5)
+        fallback_mgr = "apt"
+        for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
+            if self.main_app.sys_status.get(test_mgr): fallback_mgr = test_mgr; break
+        mgr = self.preferred_mgr if self.main_app.sys_status.get(self.preferred_mgr) else fallback_mgr
+        
+        cmd_list = []
+        pkgs_str = " ".join(self.raw_packages)
+        if mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
+        elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
+        elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
+        
+        self.anim_timer.stop()
+        self.loader.progress = 100
+        self.status_label.update("✅ 指令建構完畢！")
+        await asyncio.sleep(0.6)
+        self.dismiss(" && ".join(cmd_list))
+
+    # ================= 樹狀圖與按鈕的互動事件 =================
+    @on(Tree.NodeSelected, "#result-tree")
+    def toggle_node(self, event: Tree.NodeSelected):
+        node = event.node
+        if node.data is not None and isinstance(node.data, dict) and "selected" in node.data:
+            data = node.data
+            data["selected"] = not data["selected"]
+            
+            if data["selected"]:
+                node.set_label(f"[bold #9ece6a][X] {data['display']}[/]")
+            else:
+                node.set_label(f"[ ] {data['display']}")
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        # ⚡ 略過按鈕被按下：終止所有還在跑的搜尋任務
+        if event.button.id == "btn-skip":
+            for task in getattr(self, "search_tasks", {}).values():
+                if not task.done():
+                    task.cancel()
                     
-                for mgr, pkgs in mgrs.items():
-                    if pkgs:
-                        mgr_node = kw_node.add(f"📂 {mgr.upper()} 來源", expand=True)
-                        for pkg in pkgs:
-                            # 建立一個帶有資料的子節點
-                            leaf = mgr_node.add_leaf(f"[ ] {pkg}", data={"mgr": mgr, "pkg": pkg, "selected": False})
-                            self.all_leaf_nodes.append(leaf)
+        elif event.button.id == "tree-cancel":
+            self.dismiss(None)
+            
+        elif event.button.id == "tree-confirm":
+            selected_install = {}
+            selected_reparse = []
 
-            # ✨ 貼心功能：如果發現有與關鍵字「完全相符」的套件，自動幫使用者打勾！
-            for kw in self.raw_packages:
-                exact_match = next((l for l in self.all_leaf_nodes if l.data["pkg"] == kw), None)
-                if exact_match:
-                    exact_match.data["selected"] = True
-                    exact_match.set_label(f"[bold #9ece6a][X] {exact_match.data['pkg']}[/]")
-
-        else:
-            # 🗑️ 移除模式：因為移除通常有明確目標，直接使用偏好管理員，跳過樹狀圖
-            await asyncio.sleep(0.5)
-            fallback_mgr = "apt"
-            for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
-                if sys_status.get(test_mgr): fallback_mgr = test_mgr; break
-            mgr = self.preferred_mgr if sys_status.get(self.preferred_mgr) else fallback_mgr
+            # 收集勾選的資料
+            for leaf in getattr(self, "all_leaf_nodes", []):
+                if leaf.data.get("selected"):
+                    if leaf.data.get("type") == "install":
+                        selected_install.setdefault(leaf.data["mgr"], []).append(leaf.data["display"])
+                    elif leaf.data.get("type") == "reparse":
+                        selected_reparse.append(leaf.data["display"])
+            
+            # 🔄 優先判斷：如果有勾選「未解析」的項目，則觸發重新解析迴圈！
+            if selected_reparse:
+                self.main_app.notify(f"🔄 收到指令！正在重新解析 {len(selected_reparse)} 個套件...")
+                asyncio.create_task(self.run_search_process(selected_reparse))
+                return
+            
+            # 🚀 判斷：如果沒有要重跑的，就進入安裝環節
+            if not selected_install:
+                self.main_app.notify("⚠️ 請至少勾選一個要安裝的套件！", severity="warning")
+                return
             
             cmd_list = []
-            pkgs_str = " ".join(self.raw_packages)
-            if mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
-            elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
-            elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
-            elif mgr in ["pacman", "yay"]: cmd_list.append(f"sudo {mgr} -Rns --noconfirm {pkgs_str}")
-            elif mgr == "dnf": cmd_list.append(f"sudo dnf remove -y {pkgs_str}")
-            elif mgr == "zypper": cmd_list.append(f"sudo zypper remove -y {pkgs_str}")
-            elif mgr == "apk": cmd_list.append(f"sudo apk del {pkgs_str}")
+            for mgr, pkgs in selected_install.items():
+                pkgs_str = " ".join(pkgs)
+                if mgr == "apt": cmd_list.append(f"sudo apt install -y {pkgs_str}")
+                elif mgr == "snap": cmd_list.append(f"sudo snap install {pkgs_str}")
+                elif mgr == "flatpak": cmd_list.append(f"flatpak install -y {pkgs_str}")
 
-            self.anim_timer.stop()
-            self.loader.progress = 100
-            self.status_label.update("✅ 指令建構完畢！")
-            await asyncio.sleep(0.6)
-            self.dismiss(" && ".join(cmd_list))
-
+            final_cmd = " && ".join(cmd_list)
+            self.dismiss(final_cmd)
+            
     # ================= 樹狀圖與按鈕的互動事件 =================
     @on(Tree.NodeSelected, "#result-tree")
     def toggle_node(self, event: Tree.NodeSelected):

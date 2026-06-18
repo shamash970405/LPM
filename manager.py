@@ -934,27 +934,27 @@ class LinuxPackageManagerApp(App):
                         import re
                         
                         # 🧠 啟動智慧解碼器：還原樹狀結構與提取套件名稱
+                        # 🧠 啟動智慧解碼器：還原樹狀結構與提取套件名稱
                         with open(filepath, 'r', encoding='utf-8') as f:
                             for raw_line in f:
                                 line = raw_line.strip()
-                                # 略過標頭資訊與空白行
                                 if not line or line.startswith(('hostname:', '匯出時間:', '＝＝＝')):
                                     continue
                                 
-                                # 紀錄樹狀目錄的 Prefix
                                 if line.startswith('📁'):
                                     current_prefix = line.replace('📁', '').strip()
                                     continue
                                 
-                                # 判斷是否為樹狀節點，並清除畫線符號
                                 is_tree_item = '├──' in raw_line or '└──' in raw_line
                                 line = line.replace('├── ', '').replace('└── ', '').strip()
                                 
-                                # 移除來源標籤 (例如 [apt])
+                                # ✨ 改變在這裡：不要丟掉 mgr，把它存起來！
+                                pkg_mgr = None
                                 mgr_match = re.match(r'^\[(.*?)\]\s*(.*)', line)
-                                if mgr_match: line = mgr_match.group(2)
+                                if mgr_match: 
+                                    pkg_mgr = mgr_match.group(1).lower()
+                                    line = mgr_match.group(2)
                                 
-                                # 移除版本號 (例如 (1.0.1))
                                 ver_match = re.search(r'\((.*?)\)$', line)
                                 version = None
                                 if ver_match:
@@ -962,20 +962,18 @@ class LinuxPackageManagerApp(App):
                                     line = line[:ver_match.start()].strip()
                                 
                                 pkg_name = line
-                                
-                                # 🧩 拼湊出完整套件名稱 (處理核心本體與分支字尾)
                                 if is_tree_item and current_prefix:
                                     if pkg_name == "(核心本體)":
                                         pkg_name = current_prefix
                                     else:
                                         pkg_name = f"{current_prefix}-{pkg_name}"
                                 
-                                # 如果不略過版本，強制加上 APT 格式的版本綁定 (注意：跨來源可能有相容性風險)
                                 if not ignore_ver and version:
                                     pkg_name = f"{pkg_name}={version}"
                                     
                                 if pkg_name:
-                                    packages.append(pkg_name)
+                                    # ✨ 改成打包成字典：把 mgr 來源也一起帶過去
+                                    packages.append({"mgr": pkg_mgr, "name": pkg_name})
                                     
                         if not packages:
                             self.notify("⚠️ 檔案內沒有找到任何有效的套件名稱！", severity="warning")
