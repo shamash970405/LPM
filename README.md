@@ -6,7 +6,8 @@
 ---
 <img width="1923" height="1080" alt="image" src="https://github.com/user-attachments/assets/b352491f-3266-4f17-8c7b-4744f4d6d766" />
 
-![系統操作示範](demo/LPM demo.mp4)
+<video src="demo/LPM%20demo.mp4" controls="controls" width="100%" autoplay loop muted>
+</video>
 
 ## 🚀 核心特色
 
