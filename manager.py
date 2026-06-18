@@ -81,9 +81,7 @@ class EscMenuScreen(ModalScreen):
 
 class PackageTable(DataTable):
     """專屬綁定 Enter 鍵的表格，徹底解決與其他輸入框的按鍵衝突"""
-    BINDINGS = [
-        ("enter", "uninstall", "Enter 刪除")
-    ]
+    pass
 # ================= 3. 主介面模組 =================
 class LinuxPackageManagerApp(App):
     BINDINGS = [
@@ -308,25 +306,41 @@ class LinuxPackageManagerApp(App):
             else:
                 return
 
-            # 🚀 物理喚醒外部終端機執行 (支援批次或單一指令)
+           # 🚀 執行卸載程序 (支援批次、單一指令與 SSH 內建終端機)
             import shutil, subprocess, asyncio
-            terminal_cmd = None
-            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                if shutil.which(term) is not None:
-                    terminal_cmd = term
-                    break
-            
-            proc = None  # 💡 用來綁定行程的變數
-            try:
-                if terminal_cmd == "gnome-terminal":
-                    # 🌟 關鍵修復：加上 --wait 參數，強制叫 gnome-terminal 沒關閉前不准釋放行程！
-                    proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
-                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
-                else:
-                    proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
-            except Exception as e:
-                self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
+            from morefunction import CommandTerminalScreen # 引入我們剛寫好的內建終端機
+
+            # ✨ 判斷是否開啟了 SSH 模式
+            if getattr(self, "ssh_mode", False):
+                
+                # 🌟 核心升級：定義一個當內部終端機「關閉時」才觸發的專屬動作
+                def after_terminal_closed(_=None):
+                    self.notify("🔄 偵測到操作完畢，正在重新掃描系統套件...")
+                    import asyncio
+                    asyncio.create_task(self.load_installed_packages())
+
+                # 💻 SSH 模式：彈出終端機，並且把這個「關閉後的動作」綁定在它身上！
+                self.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
+                proc = None # 內部終端機由畫面處理，主程式不需要綁定外部 proc
+
+            else:
+                # 🖥️ 維持原本的邏輯：呼叫外部圖形終端機
+                terminal_cmd = None
+                for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    if shutil.which(term) is not None:
+                        terminal_cmd = term
+                        break
+                
+                proc = None  # 💡 用來綁定行程的變數
+                try:
+                    if terminal_cmd == "gnome-terminal":
+                        proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
+                    elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                        proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
+                    else:
+                        proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
+                except Exception as e:
+                    self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
 
             # 🎯 【主程式專屬：主動防禦型精準監聽管線】
             if proc is not None:
@@ -519,7 +533,12 @@ class LinuxPackageManagerApp(App):
                 except Exception as e:
                     self.notify(f"⚠️ {mgr} 標籤更新失敗: {str(e)}", severity="warning")
 
-        self.refresh_table_view()
+        try:
+            current_keyword = self.query_one("#pkg-input").value
+            self.refresh_table_view(search_text=current_keyword, sort_by=getattr(self, "current_sort", "name"))
+        except Exception:
+            # 防呆機制：如果找不到搜尋框，就正常刷新
+            self.refresh_table_view()
 
     async def _scan_pacman(self):
         try:
@@ -783,8 +802,20 @@ class LinuxPackageManagerApp(App):
                         else:
                             self.notify(f"⚠️ 已切換至 {selected_engine.upper()}，但您尚未輸入 API 金鑰哦！", severity="warning")
 
-                # 💡 注意：請確保你的 manager.py 最上方有寫 `from morefunction import SettingsScreen`
-                self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", "")), apply_settings_callback)
+                        if settings_data is not None:
+                            selected_engine = settings_data.get("ai_engine", "gemini")
+                        new_token = settings_data.get("api_token", "").strip()
+                        # ✨ 接住回傳的 SSH 模式狀態
+                        ssh_mode = settings_data.get("ssh_mode", False)
+                        
+                        self.current_ai_engine = selected_engine
+                        self.current_gemini_token = new_token
+                        # ✨ 存進主程式變數
+                        self.ssh_mode = ssh_mode
+
+                # 確保變數存在，預設為 False
+                current_ssh_mode = getattr(self, "ssh_mode", False)
+                self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", ""), current_ssh_mode), apply_settings_callback)
 
             
             # 📤 處理匯出套件列表
@@ -878,57 +909,6 @@ class LinuxPackageManagerApp(App):
                 
         self.push_screen(EscMenuScreen(), handle_esc_callback)
 
-    def action_uninstall(self) -> None:
-        try:
-            table = self.query_one("#installed-packages-table", DataTable)
-            
-            # 🛡️ 最終防線：確認表格真的有獲得焦點才執行，保護其他輸入框
-            if not table.has_focus:
-                return
-
-            if table.cursor_coordinate:
-                row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-                row_data = table.get_row(row_key)
-                
-                import re
-                def clean_markup(text_str: str) -> str:
-                    return re.sub(r'\[.*?\]', '', str(text_str)).strip()
-                
-                raw_mgr = clean_markup(row_data[0])
-                package_name = clean_markup(row_data[1])
-                
-                self.notify(f"🗑️ 準備解除安裝 {raw_mgr.upper()} 套件：{package_name}...")
-                
-                if raw_mgr == "pacman": uninstall_cmd = f"sudo pacman -Rns {package_name}"
-                elif raw_mgr == "apt": uninstall_cmd = f"sudo apt purge -y {package_name}"
-                elif raw_mgr == "snap": uninstall_cmd = f"sudo snap remove {package_name}"
-                else: return
-
-                import shutil, subprocess, asyncio
-                terminal_cmd = None
-                for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    if shutil.which(term) is not None:
-                        terminal_cmd = term
-                        break
-
-                if terminal_cmd == "gnome-terminal":
-                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗... '"])
-                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗... \"'"])
-                else:
-                    subprocess.Popen(["bash", "-c", uninstall_cmd])
-
-                async def delayed_refresh():
-                    await asyncio.sleep(5)
-                    try:
-                        await self.load_installed_packages()
-                        self.notify("🔄 已自動為您更新全通路套件清單！")
-                    except Exception: pass
-                asyncio.create_task(delayed_refresh())
-
-        except Exception:
-            pass # 找不到表格時（例如正在子視窗）安全靜默跳出，不拋出紅字  
-            
 if __name__ == "__main__":
     app = LinuxPackageManagerApp()
     app.run()
