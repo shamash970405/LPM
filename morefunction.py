@@ -340,3 +340,135 @@ class ExportModal(ModalScreen):
                 "inc_version": inc_version,
                 "filter_text": filter_text
             })
+# ================= 📥 匯入套件列表跳窗 =================
+import os
+import re
+from textual import on
+from textual.screen import ModalScreen
+from textual.containers import Vertical, Horizontal
+from textual.widgets import Label, Input, Button, Checkbox, TextArea
+from textual.app import ComposeResult
+
+class ImportModal(ModalScreen):
+    """匯入套件清單的專屬視窗 (附帶即時預覽與資安警告)"""
+    
+    CSS = """
+    ImportModal { align: center middle; background: rgba(0, 0, 0, 0.7); }
+    /* ✨ 調整了跳窗的高度與佈局，讓預覽框有足夠的空間 */
+    #import-container { width: 75; height: 35; background: #1f2335; border: thick #9ece6a; padding: 1 2; }
+    #import-title { text-align: center; text-style: bold; color: #9ece6a; margin-bottom: 1; width: 100%; }
+    .import-row { height: auto; margin-bottom: 1; align: left middle; }
+    .import-label { width: 15; content-align: left middle; }
+    .import-control { width: 1fr; }
+    #import-preview { height: 1fr; border: solid #565f89; background: #1a1b26; color: #a9b1d6; margin-bottom: 1; }
+    .import-warning { color: #ff5555; text-style: bold; margin-bottom: 1; text-align: center; background: rgba(255, 85, 85, 0.1); padding: 1; }
+    .import-btn-box { height: auto; align: right middle; }
+    #import-cancel { margin-right: 2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="import-container"):
+            yield Label("📥 匯入系統套件列表", id="import-title")
+
+            with Horizontal(classes="import-row"):
+                yield Label("檔案位置：", classes="import-label")
+                # ✨ 移除 value=default_path，讓它預設為空
+                yield Input(placeholder="例如: /home/xier/lpm_packages.txt", id="import-path", classes="import-control")
+            
+            yield Checkbox("略過文件內套件版本 (推薦勾選，避免跨電腦版本衝突)", value=True, id="chk-ignore-version")
+            
+            # ✨ 新增：佔據剩餘空間的唯讀預覽框
+            yield TextArea("請輸入檔案路徑以預覽即將匯入的套件...", id="import-preview", read_only=True)
+
+            # 🚨 資安警告標語
+            yield Label("⚠️ 警告：請不要相信他人給的套件列表文件，以免安裝到惡意軟體！", classes="import-warning")
+
+            with Horizontal(classes="import-btn-box"):
+                yield Button("取消", id="import-cancel", variant="error")
+                yield Button("解析並匯入 🚀", id="import-save", variant="success")
+
+    # ================= ⚡ 即時預覽引擎 =================
+    @on(Input.Changed, "#import-path")
+    @on(Checkbox.Changed, "#chk-ignore-version")
+    def update_preview(self, event=None) -> None:
+        path = self.query_one("#import-path").value.strip()
+        ignore_ver = self.query_one("#chk-ignore-version").value
+        preview_box = self.query_one("#import-preview")
+
+        if not path:
+            preview_box.text = "請輸入檔案路徑以預覽即將匯入的套件..."
+            return
+
+        if not os.path.exists(path):
+            preview_box.text = "⚠️ 找不到檔案，請確認路徑是否正確。"
+            return
+
+        if not os.path.isfile(path):
+            preview_box.text = "⚠️ 指定的路徑不是一個有效的文字檔。"
+            return
+
+        try:
+            packages = []
+            current_prefix = ""
+            
+            # 🧠 直接在打字時啟動解碼器，讓使用者看見拆解後的結果
+            with open(path, 'r', encoding='utf-8') as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith(('hostname:', '匯出時間:', '＝＝＝')):
+                        continue
+                    
+                    if line.startswith('📁'):
+                        current_prefix = line.replace('📁', '').strip()
+                        continue
+                    
+                    is_tree_item = '├──' in raw_line or '└──' in raw_line
+                    line = line.replace('├── ', '').replace('└── ', '').strip()
+                    
+                    mgr_match = re.match(r'^\[(.*?)\]\s*(.*)', line)
+                    if mgr_match: line = mgr_match.group(2)
+                    
+                    ver_match = re.search(r'\((.*?)\)$', line)
+                    version = None
+                    if ver_match:
+                        version = ver_match.group(1)
+                        line = line[:ver_match.start()].strip()
+                    
+                    pkg_name = line
+                    if is_tree_item and current_prefix:
+                        if pkg_name == "(核心本體)": pkg_name = current_prefix
+                        else: pkg_name = f"{current_prefix}-{pkg_name}"
+                    
+                    if not ignore_ver and version:
+                        pkg_name = f"{pkg_name}={version}"
+                        
+                    if pkg_name:
+                        packages.append(pkg_name)
+                        
+            if not packages:
+                preview_box.text = "⚠️ 檔案內沒有找到任何有效的套件名稱！請確認檔案格式。"
+            else:
+                # 把解析成功的陣列變成美美的字串顯示出來
+                preview_text = f"✅ 成功解析 {len(packages)} 個套件，即將準備安裝：\n"
+                preview_text += "──────────────────────────\n"
+                preview_text += "\n".join([f"📦 {p}" for p in packages])
+                preview_box.text = preview_text
+
+        except Exception as e:
+            preview_box.text = f"❌ 檔案解析發生錯誤：\n{str(e)}"
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "import-cancel":
+            self.dismiss(None)
+            return
+
+        if event.button.id == "import-save":
+            path = self.query_one("#import-path").value.strip()
+            ignore_version = self.query_one("#chk-ignore-version").value
+            
+            # ✨ 阻擋惡意送出：如果檔案不存在就不給匯入
+            if not os.path.exists(path) or not os.path.isfile(path):
+                self.app.notify("❌ 請輸入有效的檔案路徑！", severity="error")
+                return
+                
+            self.dismiss({"path": path, "ignore_version": ignore_version})

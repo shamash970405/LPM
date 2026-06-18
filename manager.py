@@ -75,12 +75,13 @@ class EscMenuScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="esc-container"):
-            yield Label("系統控制選單", id="esc-title")
+            yield Label("系統控制選單(歐批踢唉歐嗯)", id="esc-title")
             yield OptionList(
-                Option("更改介面主題", id="change_theme"),
-                Option("⚙️ 系統設定 (API Token)", id="open_settings"),  # 🎯 就是缺了這一行！把它補上去！
-                Option("📤 匯出套件列表", id="export_list"),
-                Option("結束並退出程式", id="quit")
+                Option("❄️ 更改主題", id="change_theme"),
+                Option("⚙️ 系統設定", id="open_settings"), 
+                Option("📤 匯出套件", id="export_list"),
+                Option("📥 匯入套件", id="import_list"),  
+                Option("🚪 退出程式", id="quit")
             )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -830,14 +831,17 @@ class LinuxPackageManagerApp(App):
 
             
             # 📤 處理匯出套件列表
+           # 📤 處理匯出套件列表
             elif action == "export_list":
+                from morefunction import ExportModal
+                
                 # ✨ 終極卸妝水
                 def clean_text(raw_data):
                     if hasattr(raw_data, "plain"):
                         return raw_data.plain.strip()
                     import re
                     return re.sub(r'\[.*?\]', '', str(raw_data)).strip()
-
+                    
                 # 🌟 核心升級：在打開跳窗前，先把表格撈出來洗乾淨打包！
                 table = self.query_one("#installed-packages-table")
                 package_data = []
@@ -852,6 +856,8 @@ class LinuxPackageManagerApp(App):
                 # 定義跳窗回傳後要執行的寫檔動作
                 def apply_export_callback(export_data: dict | None) -> None:
                     if export_data is not None:
+                        import socket
+                        from datetime import datetime
                         file_path = export_data["path"]
                         filter_text = export_data.get("filter_text", "").lower()
                         
@@ -869,10 +875,8 @@ class LinuxPackageManagerApp(App):
                                 f.write(f"匯出時間:{now}\n\n")
                                 f.write("＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝\n")
                                 
-                                # 🌟 寫檔時也直接使用剛剛打包好的 package_data
                                 all_packages = []
                                 for pkg in package_data:
-                                    # 寫入檔案前，一樣要把過濾掉的套件踢除
                                     if filter_text and filter_text not in pkg["name"].lower():
                                         continue
                                     all_packages.append(pkg)
@@ -910,6 +914,135 @@ class LinuxPackageManagerApp(App):
                 # 🚀 最關鍵的一行：彈出匯出設定視窗，並把準備好的禮物 (package_data) 傳遞進去！
                 self.push_screen(ExportModal(package_data), apply_export_callback)
 
+            # 📥 處理匯入套件列表
+            elif action == "import_list":
+                from morefunction import ImportModal
+                
+                def apply_import_callback(import_data: dict | None) -> None:
+                    if import_data is None: return
+                    
+                    filepath = import_data["path"]
+                    ignore_ver = import_data["ignore_version"]
+                    
+                    if not os.path.exists(filepath):
+                        self.notify("❌ 找不到指定的檔案！請確認路徑正確。", severity="error")
+                        return
+                        
+                    try:
+                        packages = []
+                        current_prefix = ""
+                        import re
+                        
+                        # 🧠 啟動智慧解碼器：還原樹狀結構與提取套件名稱
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            for raw_line in f:
+                                line = raw_line.strip()
+                                # 略過標頭資訊與空白行
+                                if not line or line.startswith(('hostname:', '匯出時間:', '＝＝＝')):
+                                    continue
+                                
+                                # 紀錄樹狀目錄的 Prefix
+                                if line.startswith('📁'):
+                                    current_prefix = line.replace('📁', '').strip()
+                                    continue
+                                
+                                # 判斷是否為樹狀節點，並清除畫線符號
+                                is_tree_item = '├──' in raw_line or '└──' in raw_line
+                                line = line.replace('├── ', '').replace('└── ', '').strip()
+                                
+                                # 移除來源標籤 (例如 [apt])
+                                mgr_match = re.match(r'^\[(.*?)\]\s*(.*)', line)
+                                if mgr_match: line = mgr_match.group(2)
+                                
+                                # 移除版本號 (例如 (1.0.1))
+                                ver_match = re.search(r'\((.*?)\)$', line)
+                                version = None
+                                if ver_match:
+                                    version = ver_match.group(1)
+                                    line = line[:ver_match.start()].strip()
+                                
+                                pkg_name = line
+                                
+                                # 🧩 拼湊出完整套件名稱 (處理核心本體與分支字尾)
+                                if is_tree_item and current_prefix:
+                                    if pkg_name == "(核心本體)":
+                                        pkg_name = current_prefix
+                                    else:
+                                        pkg_name = f"{current_prefix}-{pkg_name}"
+                                
+                                # 如果不略過版本，強制加上 APT 格式的版本綁定 (注意：跨來源可能有相容性風險)
+                                if not ignore_ver and version:
+                                    pkg_name = f"{pkg_name}={version}"
+                                    
+                                if pkg_name:
+                                    packages.append(pkg_name)
+                                    
+                        if not packages:
+                            self.notify("⚠️ 檔案內沒有找到任何有效的套件名稱！", severity="warning")
+                            return
+                            
+                        self.notify(f"✅ 成功解析 {len(packages)} 個套件！正在啟動智能安裝引擎...")
+                            
+                        # 🚀 魔法時刻：直接把解碼後的清單，丟進我們的 MTF 旗幟動畫與樹狀選擇器！
+                        from modals import SearchLoadingModal
+                        preferred = getattr(self, "preferred_mgr", "apt")
+                        
+                        def after_search(final_cmd: str | None):
+                            if not final_cmd: return
+                            
+                            from morefunction import CommandTerminalScreen
+                            if getattr(self, "ssh_mode", False):
+                                def after_term(_=None):
+                                    self.notify("🔄 批次匯入完畢，正在重新掃描系統套件...")
+                                    import asyncio
+                                    asyncio.create_task(self.load_installed_packages())
+                                self.push_screen(CommandTerminalScreen(final_cmd), after_term)
+                            else:
+                                import shutil, subprocess, os
+                                signal_file = "/tmp/lpm_refresh.tmp"
+                                if os.path.exists(signal_file):
+                                    try: os.remove(signal_file)
+                                    except Exception: pass
+
+                                terminal_cmd = None
+                                for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                                    if shutil.which(term) is not None:
+                                        terminal_cmd = term; break
+                                
+                                bash_cmd = f"{final_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
+                                
+                                try:
+                                    if terminal_cmd == "gnome-terminal":
+                                        subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
+                                    elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                                        subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
+                                    else:
+                                        subprocess.Popen(["bash", "-c", bash_cmd])
+                                except Exception as e:
+                                    self.notify(f"❌ 啟動匯入程序失敗: {str(e)}", severity="error")
+                                
+                                async def exact_refresh():
+                                    for _ in range(600):
+                                        if os.path.exists(signal_file):
+                                            try: os.remove(signal_file)
+                                            except Exception: pass
+                                            try:
+                                                await self.load_installed_packages()
+                                                self.notify("📦 匯入任務完成，套件清單已即時同步！")
+                                            except Exception: pass
+                                            break
+                                        import asyncio
+                                        await asyncio.sleep(1)
+                                import asyncio
+                                asyncio.create_task(exact_refresh())
+
+                        # 呼叫已經寫好的搜尋引擎跳窗
+                        self.push_screen(SearchLoadingModal(self, packages, preferred, is_install=True), after_search)
+
+                    except Exception as e:
+                        self.notify(f"❌ 檔案解析發生錯誤：{str(e)}", severity="error")
+                
+                self.push_screen(ImportModal(), apply_import_callback)
 
             elif action == "quit":
                 self.exit()
