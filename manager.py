@@ -94,6 +94,9 @@ class LinuxPackageManagerApp(App):
         ("Q", "quit", "系統離開"),
         ("f1", "focus_search", "搜尋選中套件"),
         ("escape", "open_esc_menu", "系統選單"),
+        ("space", "do_nothing", "多選標記"),      
+        ("enter", "do_nothing", "確認刪除"),      
+        ("z", "do_nothing", "批次處理中心"),      
         ("ctrl+left", "resize_left_pane(-2)", "縮小左欄"),
         ("ctrl+right", "resize_left_pane(2)", "放大左欄"),
         ("ctrl+up", "resize_bottom_pane(1)", "放大下欄"),
@@ -718,6 +721,13 @@ class LinuxPackageManagerApp(App):
         self.bottom_pane_height = max(20, min(80, self.bottom_pane_height + delta))
         self.query_one("#bottom-pane").styles.height = f"{self.bottom_pane_height}%"
         self.query_one("#top-box").styles.height = f"{100 - self.bottom_pane_height}%"
+
+    def action_do_nothing(self) -> None:
+        """
+        這個函式只是一個空殼，用來讓 BINDINGS 的文字能顯示在最底下的 Footer。
+        真正的 Enter、Space、Z 鍵邏輯已經由 on_key 完美攔截並處理了！
+        """
+        pass
 
     def action_focus_search(self) -> None:
         try:
