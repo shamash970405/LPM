@@ -80,43 +80,64 @@ class BatchActionModal(ModalScreen):
                 elif mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {pkgs_str}"
                 elif mgr == "apk": uninstall_cmd = f"sudo apk del {pkgs_str}"
 
-            # 💣 信號彈同步法
-            signal_file = "/tmp/lpm_refresh.tmp"
-            if os.path.exists(signal_file):
-                try: os.remove(signal_file)
-                except Exception: pass
+           # ... (上面是判斷 is_install 組合 uninstall_cmd 的地方) ...
 
-            terminal_cmd = None
-            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                if shutil.which(term) is not None:
-                    terminal_cmd = term
-                    break
-            
-            bash_cmd = f"{uninstall_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
-            
-            try:
-                if terminal_cmd == "gnome-terminal":
-                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
-                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
-                else:
-                    subprocess.Popen(["bash", "-c", bash_cmd])
-            except Exception as e:
-                self.main_app.notify(f"❌ 啟動批次程序失敗: {str(e)}", severity="error")
+            from morefunction import CommandTerminalScreen
 
-            self.dismiss()
-            
-            async def exact_refresh():
-                for _ in range(600):
-                    if os.path.exists(signal_file):
-                        try: os.remove(signal_file)
-                        except Exception: pass
-                        
-                        try:
-                            await self.main_app.load_installed_packages()
-                            self.main_app.notify("📦 偵測到批次任務完成，套件清單已即時同步！")
-                        except Exception: pass
+            # ✨ 判斷主程式是否開啟了 SSH 模式
+            if getattr(self.main_app, "ssh_mode", False):
+                
+                # 定義關閉內建終端機後的重新整理動作
+                def after_terminal_closed(_=None):
+                    self.main_app.notify("🔄 批次操作完畢，正在重新掃描系統套件...")
+                    import asyncio
+                    asyncio.create_task(self.main_app.load_installed_packages())
+
+                # 💻 SSH 模式：在主畫面上彈出內建終端機
+                self.main_app.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
+                self.dismiss() # 關閉目前的批次輸入小視窗
+                
+            else:
+                # 🖥️ 維持原本的邏輯：呼叫外部圖形終端機
+                
+                # 💣 信號彈同步法
+                signal_file = "/tmp/lpm_refresh.tmp"
+                if os.path.exists(signal_file):
+                    try: os.remove(signal_file)
+                    except Exception: pass
+
+                terminal_cmd = None
+                for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    if shutil.which(term) is not None:
+                        terminal_cmd = term
                         break
-                    await asyncio.sleep(1)
-            
-            asyncio.create_task(exact_refresh())
+                
+                bash_cmd = f"{uninstall_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
+                
+                try:
+                    if terminal_cmd == "gnome-terminal":
+                        subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
+                    elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                        subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
+                    else:
+                        subprocess.Popen(["bash", "-c", bash_cmd])
+                except Exception as e:
+                    self.main_app.notify(f"❌ 啟動批次程序失敗: {str(e)}", severity="error")
+
+                self.dismiss()
+                
+                async def exact_refresh():
+                    for _ in range(600):
+                        if os.path.exists(signal_file):
+                            try: os.remove(signal_file)
+                            except Exception: pass
+                            
+                            try:
+                                await self.main_app.load_installed_packages()
+                                self.main_app.notify("📦 偵測到批次任務完成，套件清單已即時同步！")
+                            except Exception: pass
+                            break
+                        await asyncio.sleep(1)
+                
+                import asyncio
+                asyncio.create_task(exact_refresh())
