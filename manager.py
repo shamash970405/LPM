@@ -764,17 +764,21 @@ class LinuxPackageManagerApp(App):
                         if settings_data is not None:
                             selected_engine = settings_data.get("ai_engine", "gemini")
                         new_token = settings_data.get("api_token", "").strip()
-                        # ✨ 接住回傳的 SSH 模式狀態
+                       # ✨ 接住回傳的 SSH 與偏好管理員狀態
                         ssh_mode = settings_data.get("ssh_mode", False)
+                        pref_mgr = settings_data.get("preferred_mgr", "apt")
                         
                         self.current_ai_engine = selected_engine
                         self.current_gemini_token = new_token
-                        # ✨ 存進主程式變數
                         self.ssh_mode = ssh_mode
+                        self.preferred_mgr = pref_mgr # 存入主程式
 
-                # 確保變數存在，預設為 False
+                # 確保變數存在
                 current_ssh_mode = getattr(self, "ssh_mode", False)
-                self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", ""), current_ssh_mode), apply_settings_callback)
+                current_pref_mgr = getattr(self, "preferred_mgr", "apt")
+                
+                # ✨ 把 current_pref_mgr 傳進設定視窗
+                self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", ""), current_ssh_mode, current_pref_mgr), apply_settings_callback)
 
             
             # 📤 處理匯出套件列表

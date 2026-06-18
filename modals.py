@@ -39,7 +39,8 @@ class BatchActionModal(ModalScreen):
                 yield Button("取消", variant="error", id="batch-cancel")
                 yield Button("確認發射 🚀", variant="success", id="batch-confirm")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+   # ✨ 加上 async 讓按鈕可以執行非同步的搜尋等待
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "batch-cancel":
             self.dismiss()
             return
@@ -52,55 +53,126 @@ class BatchActionModal(ModalScreen):
                 return
 
             raw_packages = [p.strip() for p in input_value.split(",") if p.strip()]
-            
             is_install = self.query_one("#radio-install").value
-            action_word = "安裝" if is_install else "解除安裝"
             
-            self.main_app.notify(f"⚡ 正在建構 {len(raw_packages)} 個套件的批次{action_word}指令...")
+            # 鎖定按鈕避免重複點擊
+            self.query_one("#batch-confirm").disabled = True
+            self.query_one("#batch-cancel").disabled = True
 
-            mgr = "apt"
-            for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
-                if shutil.which(test_mgr) is not None:
-                    mgr = test_mgr
-                    break
-
-            pkgs_str = " ".join(raw_packages)
-            uninstall_cmd = ""
+            import asyncio
+            resolved_tasks = {} # 記錄 [管理器] -> [套件名清單]
             
+            # 讀取使用者偏好與系統現有環境
+            preferred = getattr(self.main_app, "preferred_mgr", "apt")
+            sys_status = self.main_app.sys_status
+
             if is_install:
-                if mgr in ["pacman", "yay"]: uninstall_cmd = f"sudo {mgr} -S --noconfirm {pkgs_str}"
-                elif mgr == "apt": uninstall_cmd = f"sudo apt install -y {pkgs_str}"
-                elif mgr == "dnf": uninstall_cmd = f"sudo dnf install -y {pkgs_str}"
-                elif mgr == "zypper": uninstall_cmd = f"sudo zypper install -y {pkgs_str}"
-                elif mgr == "apk": uninstall_cmd = f"sudo apk add {pkgs_str}"
+                self.main_app.notify("🔍 啟動智能搜尋引擎，正在跨通路精準比對套件名稱...", timeout=4)
+                
+                for keyword in raw_packages:
+                    results = {}
+                    
+                    # 1. 🔍 APT 深度搜尋 (使用 awk 精準擷取第一欄名稱)
+                    if sys_status.get("apt"):
+                        proc = await asyncio.create_subprocess_shell(
+                            f"apt-cache search --names-only '^{keyword}' | awk 'NR==1 {{print $1}}'",
+                            stdout=asyncio.subprocess.PIPE
+                        )
+                        out, _ = await proc.communicate()
+                        name = out.decode().strip()
+                        if not name: # 如果開頭沒有，放寬搜尋
+                            proc = await asyncio.create_subprocess_shell(
+                                f"apt-cache search --names-only '{keyword}' | awk 'NR==1 {{print $1}}'",
+                                stdout=asyncio.subprocess.PIPE
+                            )
+                            out, _ = await proc.communicate()
+                            name = out.decode().strip()
+                        if name: results["apt"] = name
+
+                    # 2. 🔍 Snap 搜尋
+                    if sys_status.get("snap"):
+                        proc = await asyncio.create_subprocess_shell(
+                            f"snap find '{keyword}' 2>/dev/null | awk 'NR==2 {{print $1}}'",
+                            stdout=asyncio.subprocess.PIPE
+                        )
+                        out, _ = await proc.communicate()
+                        name = out.decode().strip()
+                        if name and "No" not in name: results["snap"] = name
+
+                    # 3. 🔍 Flatpak 搜尋 (直接請求 application ID)
+                    if sys_status.get("flatpak"):
+                        proc = await asyncio.create_subprocess_shell(
+                            f"flatpak search --columns=application '{keyword}' 2>/dev/null | awk 'NR==1 {{print $1}}'",
+                            stdout=asyncio.subprocess.PIPE
+                        )
+                        out, _ = await proc.communicate()
+                        name = out.decode().strip()
+                        if name: results["flatpak"] = name
+
+                    # 🧠 邏輯裁決中心 (父親教導的嚴謹守則)
+                    # 如果使用者偏好的管理員有找到，優先用它；若無，依次 fallback 給 apt -> snap -> flatpak
+                    if preferred in results:
+                        found_mgr, found_name = preferred, results[preferred]
+                    elif "apt" in results:
+                        found_mgr, found_name = "apt", results["apt"]
+                    elif "snap" in results:
+                        found_mgr, found_name = "snap", results["snap"]
+                    elif "flatpak" in results:
+                        found_mgr, found_name = "flatpak", results["flatpak"]
+                    else:
+                        # 如果全世界都找不到，就維持原字串丟給預設管理員去報錯
+                        found_mgr, found_name = preferred if sys_status.get(preferred) else "apt", keyword
+                    
+                    self.main_app.notify(f"💡 `{keyword}` 已解析為 [{found_mgr}] 的 `{found_name}`")
+                    resolved_tasks.setdefault(found_mgr, []).append(found_name)
+
             else:
-                if mgr in ["pacman", "yay"]: uninstall_cmd = f"sudo {mgr} -Rns --noconfirm {pkgs_str}"
-                elif mgr == "apt": uninstall_cmd = f"sudo apt purge -y {pkgs_str}"
-                elif mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {pkgs_str}"
-                elif mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {pkgs_str}"
-                elif mgr == "apk": uninstall_cmd = f"sudo apk del {pkgs_str}"
+                # 🗑️ 解除安裝：直接套用原始字串並使用偏好管理員 (避免模糊搜尋誤刪)
+                self.main_app.notify("⚡ 正在建構批次解除安裝指令...")
+                fallback_mgr = "apt"
+                for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
+                    if sys_status.get(test_mgr): fallback_mgr = test_mgr; break
+                
+                mgr = preferred if sys_status.get(preferred) else fallback_mgr
+                resolved_tasks[mgr] = raw_packages
 
-           # ... (上面是判斷 is_install 組合 uninstall_cmd 的地方) ...
+            # 🛠️ 組合終極指令 (支援多重通路串聯)
+            cmd_list = []
+            for mgr, pkgs in resolved_tasks.items():
+                pkgs_str = " ".join(pkgs)
+                if is_install:
+                    if mgr == "apt": cmd_list.append(f"sudo apt install -y {pkgs_str}")
+                    elif mgr == "snap": cmd_list.append(f"sudo snap install {pkgs_str}")
+                    elif mgr == "flatpak": cmd_list.append(f"flatpak install -y {pkgs_str}")
+                    elif mgr in ["pacman", "yay"]: cmd_list.append(f"sudo {mgr} -S --noconfirm {pkgs_str}")
+                    elif mgr == "dnf": cmd_list.append(f"sudo dnf install -y {pkgs_str}")
+                    elif mgr == "zypper": cmd_list.append(f"sudo zypper install -y {pkgs_str}")
+                    elif mgr == "apk": cmd_list.append(f"sudo apk add {pkgs_str}")
+                else:
+                    if mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
+                    elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
+                    elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
+                    elif mgr in ["pacman", "yay"]: cmd_list.append(f"sudo {mgr} -Rns --noconfirm {pkgs_str}")
+                    elif mgr == "dnf": cmd_list.append(f"sudo dnf remove -y {pkgs_str}")
+                    elif mgr == "zypper": cmd_list.append(f"sudo zypper remove -y {pkgs_str}")
+                    elif mgr == "apk": cmd_list.append(f"sudo apk del {pkgs_str}")
 
+            final_cmd = " && ".join(cmd_list)
+
+            # --- 下方保留你超棒的 SSH 內建終端機判斷邏輯 ---
             from morefunction import CommandTerminalScreen
 
-            # ✨ 判斷主程式是否開啟了 SSH 模式
             if getattr(self.main_app, "ssh_mode", False):
-                
-                # 定義關閉內建終端機後的重新整理動作
                 def after_terminal_closed(_=None):
                     self.main_app.notify("🔄 批次操作完畢，正在重新掃描系統套件...")
                     import asyncio
                     asyncio.create_task(self.main_app.load_installed_packages())
 
-                # 💻 SSH 模式：在主畫面上彈出內建終端機
-                self.main_app.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
-                self.dismiss() # 關閉目前的批次輸入小視窗
+                self.main_app.push_screen(CommandTerminalScreen(final_cmd), after_terminal_closed)
+                self.dismiss()
                 
             else:
-                # 🖥️ 維持原本的邏輯：呼叫外部圖形終端機
-                
-                # 💣 信號彈同步法
+                import os, shutil, subprocess
                 signal_file = "/tmp/lpm_refresh.tmp"
                 if os.path.exists(signal_file):
                     try: os.remove(signal_file)
@@ -112,7 +184,7 @@ class BatchActionModal(ModalScreen):
                         terminal_cmd = term
                         break
                 
-                bash_cmd = f"{uninstall_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
+                bash_cmd = f"{final_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
                 
                 try:
                     if terminal_cmd == "gnome-terminal":
@@ -134,10 +206,9 @@ class BatchActionModal(ModalScreen):
                             
                             try:
                                 await self.main_app.load_installed_packages()
-                                self.main_app.notify("📦 偵測到批次任務完成，套件清單已即時同步！")
+                                self.main_app.notify("📦 偵測到任務完成，套件清單已即時同步！")
                             except Exception: pass
                             break
                         await asyncio.sleep(1)
                 
-                import asyncio
                 asyncio.create_task(exact_refresh())

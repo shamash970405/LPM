@@ -59,10 +59,11 @@ class SettingsScreen(ModalScreen):
     """
 
     # ✨ 新增：讓設定視窗能記住目前的 SSH 模式狀態
-    def __init__(self, current_token: str = "", ssh_mode: bool = False) -> None:
+    def __init__(self, current_token: str = "", ssh_mode: bool = False, preferred_mgr: str = "apt") -> None:
         super().__init__()
         self.current_token = current_token
         self.ssh_mode = ssh_mode
+        self.preferred_mgr = preferred_mgr
 
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-container"):
@@ -84,6 +85,15 @@ class SettingsScreen(ModalScreen):
                 yield Label("進階選項：", classes="setting-label")
                 yield Checkbox("開啟 SSH 內建終端機模式 (解決遠端彈窗問題)", value=self.ssh_mode, id="setting-ssh-mode", classes="setting-control")
 
+            # ✨ 新增：偏好套件管理員選擇器
+            with Horizontal(classes="setting-row"):
+                yield Label("偏好安裝來源：", classes="setting-label")
+                yield Select(
+                    options=[("APT (預設/穩健)", "apt"), ("Snap (跨平台/最新)", "snap"), ("Flatpak (沙盒/跨平台)", "flatpak")],
+                    value=self.preferred_mgr,
+                    id="setting-pref-mgr", classes="setting-control"
+                )
+
             with Horizontal(classes="settings-btn-box"):
                 yield Button("取消", id="setting-cancel", variant="error")
                 yield Button("儲存設定 💾", id="setting-save", variant="success")
@@ -97,6 +107,7 @@ class SettingsScreen(ModalScreen):
             ai_choice = self.query_one("#setting-ai-model").value
             api_token = self.query_one("#setting-api-token").value
             ssh_mode = self.query_one("#setting-ssh-mode").value # 抓取開關狀態
+            pref_mgr = self.query_one("#setting-pref-mgr").value
             
             if not ai_choice or ai_choice == Select.BLANK:
                 self.notify("❌ 請先選擇一個 AI 引擎！", severity="error")
@@ -104,8 +115,12 @@ class SettingsScreen(ModalScreen):
             
             self.notify(f"✅ 設定已更新！SSH 模式: {'開啟' if ssh_mode else '關閉'}")
             # 將 ssh_mode 一起打包回傳
-            self.dismiss({"ai_engine": ai_choice, "api_token": api_token, "ssh_mode": ssh_mode})
-
+            self.dismiss({
+                "ai_engine": ai_choice, 
+                "api_token": api_token, 
+                "ssh_mode": ssh_mode, 
+                "preferred_mgr": pref_mgr
+            })
 
 # ================= 💻 內建終端機執行跳窗 (SSH 專用) =================
 class CommandTerminalScreen(ModalScreen):
