@@ -15,12 +15,18 @@ from morefunction import ThemeMenuScreen
 from morefunction import SettingsScreen
 from modals import BatchActionModal
 from morefunction import ExportModal
+from sys_info import SysInfo
 
 # ================= 1. Gemini AI 模組 =================
 class GeminiExplainer:
     def __init__(self):
         api_key = os.environ.get("GEMINI_API_KEY")
         self.client = genai.Client(api_key=api_key) if api_key else None
+        # 啟動獨立的系統資訊引擎
+        self.sys_info = SysInfo()
+        
+        # 把引擎測出來的狀態重新綁回 self.sys_status，維持原本表格的運作
+        self.sys_status = self.sys_info.status
 
     def refresh_client(self, new_token: str) -> None:
         if new_token:
@@ -111,6 +117,18 @@ class LinuxPackageManagerApp(App):
     """
 
     def __init__(self) -> None:
+        super().__init__()
+        self.ENABLE_COMMAND_PALETTE = False
+        
+        from theme import ThemeManager 
+        self.theme_mgr = ThemeManager("tokyonight")
+        self.ai = GeminiExplainer()
+        self.current_gemini_token = os.environ.get("GEMINI_API_KEY", "")
+
+        # ✨ 關鍵修復：在這裡把新引擎實體化，介紹給主程式！
+        self.sys_info = SysInfo()
+        self.sys_status = self.sys_info.status
+
         super().__init__()
         self.ENABLE_COMMAND_PALETTE = False
         
@@ -357,38 +375,6 @@ class LinuxPackageManagerApp(App):
                 
                 # 扣下背景監聽任務的扳機
                 asyncio.create_task(exact_refresh())
-    
-    # 🐧 偵測目前的 Linux 發行版名稱
-    def get_os_name(self) -> str:
-        try:
-            with open("/etc/os-release", "r") as f:
-                for line in f:
-                    if line.startswith("PRETTY_NAME="):
-                        # 抓出 PRETTY_NAME="Ubuntu 24.04 LTS" 裡面的字串
-                        return line.split("=")[1].strip().strip('"')
-            return "Unknown Linux"
-        except Exception:
-            return "Unknown OS"
-
-    def get_disk_info(self) -> str:
-        try:
-            total, used, free = shutil.disk_usage("/")
-            total_gb = total / (1024 ** 3)
-            used_gb = used / (1024 ** 3)
-            free_gb = free / (1024 ** 3)
-            used_percent = (used / total) * 100
-            bar_length = 20
-            filled_length = int(round(bar_length * used / float(total)))
-            bar_color = "red" if used_percent > 85 else ("yellow" if used_percent > 60 else "green")
-            bar = f"[{bar_color}]" + "█" * filled_length + f"[/{bar_color}]" + "░" * (bar_length - filled_length)
-            return (
-                f"💾 系統容量狀態 (根目錄 / block)：\n"
-                f"  {bar}  {used_percent:.1f}%\n"
-                f"  - 總大小: {total_gb:.1f} GB\n"
-                f"  - 已使用: {used_gb:.1f} GB\n"
-                f"  - 剩餘可用: [bold green]{free_gb:.1f} GB[/bold green]"
-            )
-        except Exception: return "💾 系統容量狀態: 無法讀取"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -398,17 +384,14 @@ class LinuxPackageManagerApp(App):
             
             # ⬅️ 左欄：系統狀態與硬碟資訊
             with Vertical(classes="left-pane", id="left-pane"):
-                yield Label("🔍 系統環境偵測：", classes="section-title")
-                yield Label(f"  發行版：[bold #9ece6a]{self.get_os_name()}[/]", classes="status-label")
-                yield Label("  套件管理員：", classes="status-label")
+                yield Label(f"  發行版：[bold #9ece6a]{self.sys_info.get_os_name()}[/]", classes="status-label")
                 
                 # 這裡只預留標籤位置，讓底下的 load_installed_packages 去更新數字
                 for mgr, avail in self.sys_status.items():
                     if avail:
                         yield Label(f"   - {mgr} (計算中...)", id=f"lbl-{mgr}", classes="status-label")
                 
-                yield Label(self.get_disk_info(), classes="disk-label")
-            
+                yield Label(self.sys_info.get_disk_info(), classes="disk-label")            
             # ➡️ 右欄：Gemini AI 查詢面板 (就是你剛剛不小心弄不見的這塊！)
             with Vertical(classes="right-pane"):
                 yield Label("線上Gemini查詢：", classes="section-title")
