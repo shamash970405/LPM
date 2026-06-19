@@ -263,23 +263,12 @@ class LinuxPackageManagerApp(App):
                     grouped_tasks.setdefault(pkg_info["manager"], []).append(pkg_info["name"])
                 
                 # 🛠️ 根據不同管理員串聯多個套件 (例如：apt purge -y pkg1 pkg2)
+                # ✅ 升級後無腦優雅的寫法：
                 cmd_list = []
                 for mgr, pkgs in grouped_tasks.items():
-                    pkgs_str = " ".join(pkgs)
-                    if mgr == "pacman": cmd_list.append(f"sudo pacman -Rns {pkgs_str}")
-                    elif mgr == "yay": cmd_list.append(f"yay -Rns {pkgs_str}")
-                    elif mgr == "paru": cmd_list.append(f"paru -Rns {pkgs_str}")
-                    elif mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
-                    elif mgr == "dnf": cmd_list.append(f"sudo dnf remove -y {pkgs_str}")
-                    elif mgr == "zypper": cmd_list.append(f"sudo zypper remove -y {pkgs_str}")
-                    elif mgr == "apk": cmd_list.append(f"sudo apk del {pkgs_str}")
-                    elif mgr == "emerge": cmd_list.append(f"sudo emerge --deselect {pkgs_str}")
-                    elif mgr == "xbps": cmd_list.append(f"sudo xbps-remove -R {pkgs_str}")
-                    elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
-                    elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
-                    elif mgr == "brew": cmd_list.append(f"brew uninstall {pkgs_str}")
-                
-                # 用 Linux 的 && 串聯所有管理員指令，達成一氣呵成的批次解除安裝
+            # 讓 sys_info 自動依據管理員和動作，噴出對應的 Arch 或 Debian 指令！
+                    cmd_list.append(self.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=pkgs))
+
                 uninstall_cmd = " && ".join(cmd_list)
                 self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
                 
