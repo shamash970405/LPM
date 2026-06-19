@@ -131,26 +131,62 @@ class SearchLoadingModal(ModalScreen):
         tasks = []
         
         async def fetch_candidates(mgr_name, keyword):
+            import shutil
             try:
+                # 🚀 防彈核心 1：透過 shutil.which 抓取「絕對路徑」，無懼 /bin/sh 環境變數遺失！
+                # 🚀 防彈核心 2：加入 2>/dev/null 將報錯丟入黑洞，確保 stdout 乾淨
+                # 🚀 防彈核心 3：decode 加入 errors='ignore'，無視任何編碼報錯
+                
                 if mgr_name == "apt":
-                    proc = await asyncio.create_subprocess_shell(f"apt-cache search --names-only '{keyword}' | awk '{{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    cmd = shutil.which("apt-cache") or "apt-cache"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --names-only '{keyword}' 2>/dev/null | awk '{{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("apt", [n for n in out.decode().strip().split('\n') if n])
+                    return ("apt", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    
                 elif mgr_name == "snap":
-                    proc = await asyncio.create_subprocess_shell(f"snap find '{keyword}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    cmd = shutil.which("snap") or "snap"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} find '{keyword}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("snap", [n for n in out.decode().strip().split('\n') if n and "No" not in n])
+                    return ("snap", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "No" not in n])
+                    
                 elif mgr_name == "flatpak":
-                    proc = await asyncio.create_subprocess_shell(f"flatpak search --columns=application '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    cmd = shutil.which("flatpak") or "flatpak"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --columns=application '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    names = [n for n in out.decode().strip().split('\n') if n and "Application" not in n and "---" not in n]
+                    names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "Application" not in n and "---" not in n]
                     return ("flatpak", names)
-            except Exception: pass
+                    
+                elif mgr_name == "pacman":
+                    cmd = shutil.which("pacman") or "pacman"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    return ("pacman", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    
+                elif mgr_name == "yay":
+                    cmd = shutil.which("yay") or "yay"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    return ("yay", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    
+                elif mgr_name == "paru":
+                    cmd = shutil.which("paru") or "paru"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    return ("paru", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    
+            except Exception: 
+                pass # 如果真的發生核爆級錯誤，安靜地退回空陣列，不卡死主程式
             return (mgr_name, [])
 
+        # 任務派發
         if sys_status.get("apt"): tasks.append(fetch_candidates("apt", kw))
         if sys_status.get("snap"): tasks.append(fetch_candidates("snap", kw))
         if sys_status.get("flatpak"): tasks.append(fetch_candidates("flatpak", kw))
+        
+        # ✨ Arch 專屬防禦
+        if sys_status.get("yay"): tasks.append(fetch_candidates("yay", kw))
+        elif sys_status.get("paru"): tasks.append(fetch_candidates("paru", kw))
+        elif sys_status.get("pacman"): tasks.append(fetch_candidates("pacman", kw))
 
         fetched_results = await asyncio.gather(*tasks)
         return {mgr: names for mgr, names in fetched_results if names}
