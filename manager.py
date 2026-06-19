@@ -77,7 +77,6 @@ class EscMenuScreen(ModalScreen):
         with Vertical(id="esc-container"):
             yield Label("系統控制選單(歐批踢唉歐嗯)", id="esc-title")
             yield OptionList(
-                Option("❄️ 更改主題", id="change_theme"),
                 Option("⚙️ 系統設定", id="open_settings"), 
                 Option("📤 匯出套件", id="export_list"),
                 Option("📥 匯入套件", id="import_list"),  
@@ -89,6 +88,10 @@ class EscMenuScreen(ModalScreen):
 
 class PackageTable(DataTable):
     """專屬綁定 Enter 鍵的表格，徹底解決與其他輸入框的按鍵衝突"""
+    BINDINGS = [
+        # ✨ 將無敵星星縮小範圍，只綁定在這個表格上！
+        Binding("enter", "app.enter_action", "確認刪除", priority=True)
+    ]
     pass
 # ================= 3. 主介面模組 =================
 class LinuxPackageManagerApp(App):
@@ -99,8 +102,8 @@ class LinuxPackageManagerApp(App):
         ("space", "space_action", "多選標記"),      
         
         # ✨ 終極殺招：用 Binding 物件並加上 priority=True，強勢覆蓋 DataTable 的隱藏設定！
-        Binding("enter", "enter_action", "確認刪除", priority=True), 
-        
+        ("enter", "do_nothing", "確認刪除"),
+
         ("z", "z_action", "批量安裝/卸載"),      
         ("ctrl+left", "resize_left_pane(-2)", "縮小左欄"),
         ("ctrl+right", "resize_left_pane(2)", "放大左欄"),
@@ -369,27 +372,25 @@ class LinuxPackageManagerApp(App):
             # ⬅️ 左欄：系統狀態與硬碟資訊
             with Vertical(classes="left-pane", id="left-pane"):
                 yield Label(f"  發行版：[bold #9ece6a]{self.sys_info.get_os_name()}[/]", classes="status-label")
-                
-                # 這裡只預留標籤位置，讓底下的 load_installed_packages 去更新數字
                 for mgr, avail in self.sys_status.items():
                     if avail:
                         yield Label(f"   - {mgr} (計算中...)", id=f"lbl-{mgr}", classes="status-label")
-                
                 yield Label(self.sys_info.get_disk_info(), classes="disk-label")            
-            # ➡️ 右欄：Gemini AI 查詢面板 (就是你剛剛不小心弄不見的這塊！)
+            
+            # ➡️ 右欄：Gemini AI 查詢面板
             with Vertical(classes="right-pane"):
                 yield Label("線上Gemini查詢：", classes="section-title")
                 yield Input(placeholder="在此輸入套件名稱", id="pkg-input")
                 yield Markdown("等待輸入中...", id="ai-output")
                 
-        # 📦 下半部：套件表格
+        # 📦 下半部：套件表格 (⚠️ 請確保這個區塊只有一個！)
         with Vertical(classes="bottom-pane", id="bottom-pane"):
             yield Label("套件列表", classes="section-title")
             
-            # 確保你使用的是 DataTable (如果你先前改成 PackageTable，這裡請維持 PackageTable)
-            yield DataTable(id="installed-packages-table")
+            # ✨ 這是我們剛剛換上的客製化表格
+            yield PackageTable(id="installed-packages-table")
             
-        yield Footer()
+        yield Footer()    
 
     def on_mount(self) -> None:
         table = self.query_one("#installed-packages-table", DataTable)
@@ -760,9 +761,126 @@ class LinuxPackageManagerApp(App):
         """Space 的專屬空殼，真實邏輯在 on_key"""
         pass
 
-    def action_enter_action(self) -> None:
-        """Enter 的專屬空殼，真實邏輯在 on_key"""
+    def action_do_nothing(self) -> None:
+        """純顯示用的空殼"""
         pass
+
+    def action_enter_action(self) -> None:
+        """✅ 真實的 Enter 執行邏輯已經搬來專屬 Action 這裡了！"""
+        # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷，讓輸入框能正常運作
+        if self.focused and getattr(self.focused, "id", None) == "pkg-input":
+            return
+
+        try:
+            table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
+        except Exception:
+            return 
+
+        # 🧰 防呆初始化
+        if not hasattr(self, "selected_packages"):
+            self.selected_packages = {}
+
+        uninstall_cmd = ""
+        
+        import re
+        def clean_markup(text_str: str) -> str:
+            return re.sub(r'\[.*?\]', '', str(text_str)).strip()
+        
+        # 🚨 分流 A：如果選取清單裡有東西，啟動「批次大規模刪除指令建構引擎」！
+        if self.selected_packages:
+            grouped_tasks = {}
+            for pkg_info in self.selected_packages.values():
+                grouped_tasks.setdefault(pkg_info["manager"], []).append(pkg_info["name"])
+            
+            cmd_list = []
+            for mgr, pkgs in grouped_tasks.items():
+                pkgs_str = " ".join(pkgs)
+                if mgr == "pacman": cmd_list.append(f"sudo pacman -Rns {pkgs_str}")
+                elif mgr == "yay": cmd_list.append(f"yay -Rns {pkgs_str}")
+                elif mgr == "paru": cmd_list.append(f"paru -Rns {pkgs_str}")
+                elif mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
+                elif mgr == "dnf": cmd_list.append(f"sudo dnf remove -y {pkgs_str}")
+                elif mgr == "zypper": cmd_list.append(f"sudo zypper remove -y {pkgs_str}")
+                elif mgr == "apk": cmd_list.append(f"sudo apk del {pkgs_str}")
+                elif mgr == "emerge": cmd_list.append(f"sudo emerge --deselect {pkgs_str}")
+                elif mgr == "xbps": cmd_list.append(f"sudo xbps-remove -R {pkgs_str}")
+                elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
+                elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
+                elif mgr == "brew": cmd_list.append(f"brew uninstall {pkgs_str}")
+            
+            uninstall_cmd = " && ".join(cmd_list)
+            self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
+            
+            self.selected_packages.clear()
+            self.clear_notifications()
+            
+        # 🎯 分流 B：清單是空的，退回原本高精準度的「單一套件移除」邏輯
+        elif table.cursor_coordinate:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            row_data = table.get_row(row_key)
+            
+            raw_mgr = clean_markup(row_data[0])
+            package_name = clean_markup(row_data[1])
+            
+            self.notify(f"🚀 鍵盤觸發: 準備解除安裝 {raw_mgr.upper()} 套件: {package_name}...")
+            
+            if raw_mgr == "pacman": uninstall_cmd = f"sudo pacman -Rns {package_name}"
+            elif raw_mgr == "yay": uninstall_cmd = f"yay -Rns {package_name}"
+            elif raw_mgr == "paru": uninstall_cmd = f"paru -Rns {package_name}"
+            elif raw_mgr == "apt": uninstall_cmd = f"sudo apt purge -y {package_name}"
+            elif raw_mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {package_name}"
+            elif raw_mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {package_name}"
+            elif raw_mgr == "apk": uninstall_cmd = f"sudo apk del {package_name}"
+            elif raw_mgr == "emerge": uninstall_cmd = f"sudo emerge --deselect {package_name}"
+            elif raw_mgr == "xbps": uninstall_cmd = f"sudo xbps-remove -R {package_name}"
+            elif raw_mgr == "snap": uninstall_cmd = f"sudo snap remove {package_name}"
+            elif raw_mgr == "flatpak": uninstall_cmd = f"flatpak uninstall -y {package_name}"
+            elif raw_mgr == "brew": uninstall_cmd = f"brew uninstall {package_name}"
+            else: return
+        
+        else:
+            return
+
+        # 🚀 執行卸載程序
+        import shutil, subprocess, asyncio
+        from morefunction import CommandTerminalScreen
+
+        if getattr(self, "ssh_mode", False):
+            def after_terminal_closed(_=None):
+                self.notify("🔄 偵測到操作完畢，正在重新掃描系統套件...")
+                import asyncio
+                asyncio.create_task(self.load_installed_packages())
+
+            self.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
+            proc = None 
+        else:
+            terminal_cmd = None
+            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                if shutil.which(term) is not None:
+                    terminal_cmd = term
+                    break
+            
+            proc = None 
+            try:
+                if terminal_cmd == "gnome-terminal":
+                    proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
+                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
+                else:
+                    proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
+            except Exception as e:
+                self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
+
+        if proc is not None:
+            async def exact_refresh():
+                await asyncio.to_thread(proc.wait)
+                try:
+                    await self.load_installed_packages()
+                    self.notify("📦 偵測到刪除程序完成，套件清單已即時同步！")
+                except Exception: 
+                    pass
+            
+            asyncio.create_task(exact_refresh())
 
     def action_z_action(self) -> None:
         """Z 鍵的專屬空殼，真實邏輯在 on_key"""
@@ -770,34 +888,35 @@ class LinuxPackageManagerApp(App):
 
     def action_focus_search(self) -> None:
         try:
-            table = self.query_one("#installed-packages-table", DataTable)
+            table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
             row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
             row_data = table.get_row(row_key)
             package_name = row_data[1].replace("[b white on #ff5555]", "").replace("[/b white on #ff5555]", "").strip()
-            search_input = self.query_one("#pkg-input", Input)
+            search_input = self.query_one("#pkg-input", __import__("textual").widgets.Input)
             search_input.value = package_name
             search_input.focus()
-            self.refresh_table_view(highlight_keyword=package_name)
+            self.refresh_table_view(search_text=package_name)
             self.notify(f"🔍 已自動鎖定並搜尋：{package_name}")
         except Exception:
-            self.query_one("#pkg-input", Input).focus()
+            self.query_one("#pkg-input", __import__("textual").widgets.Input).focus()
 
     def action_open_esc_menu(self) -> None:
-       # 🎯 處理 Esc 選單的點擊回呼
         def handle_esc_callback(action: str | None) -> None:
-            # 1. 如果使用者按了 Esc 或點擊旁邊取消，action 會是 None，直接略過
             if not action:
                 return
 
-            # 2. 判斷接收到的字串
             if action == "open_settings":
                 def apply_settings_callback(settings_data: dict | None) -> None:
                     if settings_data is not None:
                         selected_engine = settings_data.get("ai_engine", "gemini")
                         new_token = settings_data.get("api_token", "").strip()
+                        ssh_mode = settings_data.get("ssh_mode", False)
+                        pref_mgr = settings_data.get("preferred_mgr", "apt")
                         
                         self.current_ai_engine = selected_engine
                         self.current_gemini_token = new_token
+                        self.ssh_mode = ssh_mode
+                        self.preferred_mgr = pref_mgr
                         
                         try:
                             self.ai.refresh_client(new_token)
@@ -810,83 +929,45 @@ class LinuxPackageManagerApp(App):
                         else:
                             self.notify(f"⚠️ 已切換至 {selected_engine.upper()}，但您尚未輸入 API 金鑰哦！", severity="warning")
 
-                        if settings_data is not None:
-                            selected_engine = settings_data.get("ai_engine", "gemini")
-                        new_token = settings_data.get("api_token", "").strip()
-                       # ✨ 接住回傳的 SSH 與偏好管理員狀態
-                        ssh_mode = settings_data.get("ssh_mode", False)
-                        pref_mgr = settings_data.get("preferred_mgr", "apt")
-                        
-                        self.current_ai_engine = selected_engine
-                        self.current_gemini_token = new_token
-                        self.ssh_mode = ssh_mode
-                        self.preferred_mgr = pref_mgr # 存入主程式
-
-                # 確保變數存在
                 current_ssh_mode = getattr(self, "ssh_mode", False)
                 current_pref_mgr = getattr(self, "preferred_mgr", "apt")
-                
-                # ✨ 把 current_pref_mgr 傳進設定視窗
+                from morefunction import SettingsScreen
                 self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", ""), current_ssh_mode, current_pref_mgr), apply_settings_callback)
 
-            
-            # 📤 處理匯出套件列表
-           # 📤 處理匯出套件列表
             elif action == "export_list":
                 from morefunction import ExportModal
-                
-                # ✨ 終極卸妝水
                 def clean_text(raw_data):
-                    if hasattr(raw_data, "plain"):
-                        return raw_data.plain.strip()
+                    if hasattr(raw_data, "plain"): return raw_data.plain.strip()
                     import re
                     return re.sub(r'\[.*?\]', '', str(raw_data)).strip()
                     
-                # 🌟 核心升級：在打開跳窗前，先把表格撈出來洗乾淨打包！
                 table = self.query_one("#installed-packages-table")
                 package_data = []
                 for row_key in table.rows:
                     row = table.get_row(row_key)
-                    package_data.append({
-                        "mgr": clean_text(row[0]),
-                        "name": clean_text(row[1]),
-                        "version": clean_text(row[3])
-                    })
+                    package_data.append({"mgr": clean_text(row[0]), "name": clean_text(row[1]), "version": clean_text(row[3])})
 
-                # 定義跳窗回傳後要執行的寫檔動作
                 def apply_export_callback(export_data: dict | None) -> None:
                     if export_data is not None:
-                        import socket
+                        import socket, os
                         from datetime import datetime
                         file_path = export_data["path"]
                         filter_text = export_data.get("filter_text", "").lower()
                         
-                        if not file_path:
-                            file_path = os.path.expanduser("~/lpm_packages.txt")
-                        elif os.path.isdir(file_path):
-                            file_path = os.path.join(file_path, "lpm_packages.txt")
+                        if not file_path: file_path = os.path.expanduser("~/lpm_packages.txt")
+                        elif os.path.isdir(file_path): file_path = os.path.join(file_path, "lpm_packages.txt")
                         
                         try:
                             with open(file_path, "w", encoding="utf-8") as f:
                                 hostname = socket.gethostname()
                                 now = datetime.now().strftime("%Y/%m/%d  %H:%M")
+                                f.write(f"hostname:{hostname}\n匯出時間:{now}\n\n＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝\n")
                                 
-                                f.write(f"hostname:{hostname}\n")
-                                f.write(f"匯出時間:{now}\n\n")
-                                f.write("＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝\n")
-                                
-                                all_packages = []
-                                for pkg in package_data:
-                                    if filter_text and filter_text not in pkg["name"].lower():
-                                        continue
-                                    all_packages.append(pkg)
+                                all_packages = [pkg for pkg in package_data if not filter_text or filter_text in pkg["name"].lower()]
                                 
                                 from collections import defaultdict
                                 groups = defaultdict(list)
-                                for pkg in all_packages:
-                                    parts = pkg["name"].split("-", 1)
-                                    prefix = parts[0]
-                                    groups[prefix].append(pkg)
+                                for pkg in all_packages: groups[pkg["name"].split("-", 1)[0]].append(pkg)
                                 
                                 for prefix in sorted(groups.keys()):
                                     items = sorted(groups[prefix], key=lambda x: x["name"])
@@ -899,8 +980,7 @@ class LinuxPackageManagerApp(App):
                                     else:
                                         f.write(f"📁 {prefix}\n") 
                                         for i, pkg in enumerate(items):
-                                            is_last = (i == len(items) - 1)
-                                            branch = "└── " if is_last else "├── "
+                                            branch = "└── " if i == len(items) - 1 else "├── "
                                             suffix = pkg["name"][len(prefix)+1:] if pkg["name"] != prefix else "(核心本體)"
                                             line = suffix
                                             if export_data["inc_version"]: line += f" ({pkg['version']})"
@@ -911,19 +991,16 @@ class LinuxPackageManagerApp(App):
                         except Exception as e:
                             self.notify(f"❌ 匯出失敗：{str(e)}", severity="error")
 
-                # 🚀 最關鍵的一行：彈出匯出設定視窗，並把準備好的禮物 (package_data) 傳遞進去！
                 self.push_screen(ExportModal(package_data), apply_export_callback)
 
-            # 📥 處理匯入套件列表
             elif action == "import_list":
                 from morefunction import ImportModal
-                
                 def apply_import_callback(import_data: dict | None) -> None:
                     if import_data is None: return
-                    
                     filepath = import_data["path"]
                     ignore_ver = import_data["ignore_version"]
                     
+                    import os
                     if not os.path.exists(filepath):
                         self.notify("❌ 找不到指定的檔案！請確認路徑正確。", severity="error")
                         return
@@ -932,15 +1009,10 @@ class LinuxPackageManagerApp(App):
                         packages = []
                         current_prefix = ""
                         import re
-                        
-                        # 🧠 啟動智慧解碼器：還原樹狀結構與提取套件名稱
-                        # 🧠 啟動智慧解碼器：還原樹狀結構與提取套件名稱
                         with open(filepath, 'r', encoding='utf-8') as f:
                             for raw_line in f:
                                 line = raw_line.strip()
-                                if not line or line.startswith(('hostname:', '匯出時間:', '＝＝＝')):
-                                    continue
-                                
+                                if not line or line.startswith(('hostname:', '匯出時間:', '＝＝＝')): continue
                                 if line.startswith('📁'):
                                     current_prefix = line.replace('📁', '').strip()
                                     continue
@@ -948,7 +1020,6 @@ class LinuxPackageManagerApp(App):
                                 is_tree_item = '├──' in raw_line or '└──' in raw_line
                                 line = line.replace('├── ', '').replace('└── ', '').strip()
                                 
-                                # ✨ 改變在這裡：不要丟掉 mgr，把它存起來！
                                 pkg_mgr = None
                                 mgr_match = re.match(r'^\[(.*?)\]\s*(.*)', line)
                                 if mgr_match: 
@@ -963,17 +1034,10 @@ class LinuxPackageManagerApp(App):
                                 
                                 pkg_name = line
                                 if is_tree_item and current_prefix:
-                                    if pkg_name == "(核心本體)":
-                                        pkg_name = current_prefix
-                                    else:
-                                        pkg_name = f"{current_prefix}-{pkg_name}"
+                                    pkg_name = current_prefix if pkg_name == "(核心本體)" else f"{current_prefix}-{pkg_name}"
                                 
-                                if not ignore_ver and version:
-                                    pkg_name = f"{pkg_name}={version}"
-                                    
-                                if pkg_name:
-                                    # ✨ 改成打包成字典：把 mgr 來源也一起帶過去
-                                    packages.append({"mgr": pkg_mgr, "name": pkg_name})
+                                if not ignore_ver and version: pkg_name = f"{pkg_name}={version}"
+                                if pkg_name: packages.append({"mgr": pkg_mgr, "name": pkg_name})
                                     
                         if not packages:
                             self.notify("⚠️ 檔案內沒有找到任何有效的套件名稱！", severity="warning")
@@ -981,13 +1045,11 @@ class LinuxPackageManagerApp(App):
                             
                         self.notify(f"✅ 成功解析 {len(packages)} 個套件！正在啟動智能安裝引擎...")
                             
-                        # 🚀 魔法時刻：直接把解碼後的清單，丟進我們的 MTF 旗幟動畫與樹狀選擇器！
                         from modals import SearchLoadingModal
                         preferred = getattr(self, "preferred_mgr", "apt")
                         
                         def after_search(final_cmd: str | None):
                             if not final_cmd: return
-                            
                             from morefunction import CommandTerminalScreen
                             if getattr(self, "ssh_mode", False):
                                 def after_term(_=None):
@@ -996,7 +1058,7 @@ class LinuxPackageManagerApp(App):
                                     asyncio.create_task(self.load_installed_packages())
                                 self.push_screen(CommandTerminalScreen(final_cmd), after_term)
                             else:
-                                import shutil, subprocess, os
+                                import shutil, subprocess
                                 signal_file = "/tmp/lpm_refresh.tmp"
                                 if os.path.exists(signal_file):
                                     try: os.remove(signal_file)
@@ -1034,7 +1096,6 @@ class LinuxPackageManagerApp(App):
                                 import asyncio
                                 asyncio.create_task(exact_refresh())
 
-                        # 呼叫已經寫好的搜尋引擎跳窗
                         self.push_screen(SearchLoadingModal(self, packages, preferred, is_install=True), after_search)
 
                     except Exception as e:
@@ -1045,7 +1106,6 @@ class LinuxPackageManagerApp(App):
             elif action == "quit":
                 self.exit()
 
-            # 🚨 3. 抓漏神器：如果收到不在預期內的指令，直接印在畫面上！
             else:
                 self.notify(f"❌ 選單指令對不上：未知的 action '{action}'", severity="error")
                 

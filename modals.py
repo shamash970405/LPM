@@ -7,7 +7,7 @@ import random
 from textual import on
 from textual.screen import ModalScreen
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Label, Input, RadioSet, RadioButton, Button, Static, Tree
+from textual.widgets import Label, Input, RadioSet, RadioButton, Button, Static, Tree, RichLog
 from textual.reactive import reactive
 from rich.text import Text
 
@@ -49,21 +49,29 @@ class TransFlagLoader(Static):
 
 # ================= 🔍 獨立的搜尋等待與樹狀選擇視窗 =================
 class SearchLoadingModal(ModalScreen):
-    """跨通路搜尋並提供樹狀選擇列表的載入畫面 (支援10秒略過與中斷接續)"""
+    """跨通路搜尋並提供樹狀選擇列表的載入畫面 (支援超大預覽框與手動結算)"""
     
     CSS = """
     SearchLoadingModal { align: center middle; background: rgba(0, 0, 0, 0.85); }
-    #loader-container { width: 65; height: auto; max-height: 90%; background: #1f2335; border: thick #7aa2f7; padding: 2 4; align: center middle; }
+    /* ✨ 將視窗拉高至 90%，讓預覽框有巨大的展示空間 */
+    #loader-container { width: 75; height: 90%; background: #1f2335; border: thick #7aa2f7; padding: 2 4; }
     
-    /* 動畫區塊 */
-    #anim-section { width: 100%; height: auto; align: center middle; margin-bottom: 1; }
-    #flag-loader { content-align: center middle; margin-bottom: 1; }
-    #loader-status { text-align: center; color: #e0af68; text-style: bold; margin-bottom: 1; }
-    #skip-box { width: 100%; height: auto; align: center middle; display: none; }
+    /* 動畫與日誌區塊 */
+    #anim-section { width: 100%; height: 100%; align: center top; }
+    #flag-loader { height: auto; content-align: center middle; margin-bottom: 1; }
+    #loader-status { height: auto; text-align: center; color: #e0af68; text-style: bold; margin-bottom: 1; }
     
-    /* 樹狀列表區域預設隱藏，搜尋完畢後顯示 */
-    #tree-section { display: none; width: 100%; height: auto; margin-top: 1; }
-    #result-tree { height: 18; border: solid #565f89; background: #1a1b26; margin-bottom: 1; }
+    /* ✨ 預覽框自動撐滿剩餘空間 (1fr) */
+    #search-log { height: 1fr; border: solid #565f89; background: #16161e; margin-bottom: 1; padding: 0 1; }
+    
+    /* ✨ 將按鈕統一放置在右下角 */
+    #action-box { width: 100%; height: auto; align: right middle; }
+    #btn-skip { display: none; margin-right: 1; }
+    #btn-view-report { display: none; }
+    
+    /* 樹狀列表區域 */
+    #tree-section { display: none; width: 100%; height: 100%; margin-top: 0; }
+    #result-tree { height: 1fr; border: solid #565f89; background: #1a1b26; margin-bottom: 1; }
     #tree-btn-box { height: auto; align: right middle; }
     #tree-cancel { margin-right: 2; }
     """
@@ -74,21 +82,24 @@ class SearchLoadingModal(ModalScreen):
         self.raw_packages = raw_packages
         self.preferred_mgr = preferred_mgr
         self.is_install = is_install
-        self.all_leaf_nodes = [] # 儲存所有可勾選的節點
-        self.resolved_dict = {}  # 跨次搜尋累計成功的套件字典
+        self.all_leaf_nodes = [] 
+        self.resolved_dict = {}  
 
     def compose(self):
         with Vertical(id="loader-container"):
-            # 上半部：MTF 旗幟、狀態字與「略過按鈕」
+            # 上半部：MTF 旗幟、狀態字、巨大預覽日誌與「右下角控制按鈕」
             with Vertical(id="anim-section"):
                 yield TransFlagLoader(id="flag-loader")
                 yield Label("尋找中.....wait a minute\n準備啟動引擎...", id="loader-status")
-                with Horizontal(id="skip-box"):
-                    yield Button("⏳ 略過長時間搜尋 (跳轉預覽)", id="btn-skip", variant="warning")
+                yield RichLog(id="search-log", markup=True) 
+                
+                with Horizontal(id="action-box"):
+                    yield Button("⏳ 略過剩餘搜尋", id="btn-skip", variant="warning")
+                    yield Button("🏁 結束並查看報告", id="btn-view-report", variant="success")
             
-            # 下半部：隱藏的樹狀列表區域
+            # 下半部：隱藏的樹狀結算清單
             with Vertical(id="tree-section"):
-                yield Label("🔍 [bold #7aa2f7]批次解析狀態[/] (可勾選所需項目)：", classes="section-title")
+                yield Label("🔍 [bold #7aa2f7]批次解析報告[/] (可勾選所需項目)：", classes="section-title")
                 yield Tree("📦 跨通路搜尋結果", id="result-tree")
                 with Horizontal(id="tree-btn-box"):
                     yield Button("取消", id="tree-cancel", variant="error")
@@ -100,7 +111,6 @@ class SearchLoadingModal(ModalScreen):
         self.mgrs = ["apt", "snap", "flatpak"]
         
         if self.is_install:
-            # 🚀 啟動可中斷的解析引擎
             self.search_process_task = asyncio.create_task(self.run_search_process(self.raw_packages))
         else:
             self.search_process_task = asyncio.create_task(self.perform_uninstall())
@@ -114,8 +124,7 @@ class SearchLoadingModal(ModalScreen):
         self.status_label.update(f"尋找中.....wait a minute\n正在尋找 {current_mgr}")
 
     def show_skip_btn(self):
-        # 10 秒後顯示略過按鈕
-        self.query_one("#skip-box").styles.display = "block"
+        self.query_one("#btn-skip").styles.display = "block"
 
     async def fetch_all_managers(self, kw):
         sys_status = self.main_app.sys_status
@@ -147,12 +156,15 @@ class SearchLoadingModal(ModalScreen):
         return {mgr: names for mgr, names in fetched_results if names}
 
     async def run_search_process(self, input_packages):
-        """核心解析引擎 (支援中斷、百萬防爆，以及來源保送高速通道)"""
         self.query_one("#anim-section").styles.display = "block"
         self.query_one("#tree-section").styles.display = "none"
-        self.query_one("#skip-box").styles.display = "none"
+        self.query_one("#btn-skip").styles.display = "none"
+        self.query_one("#btn-view-report").styles.display = "none"
         self.loader.progress = 0
         self.mgr_idx = 0
+
+        log_view = self.query_one("#search-log", RichLog)
+        log_view.clear()
 
         self.anim_timer = self.set_interval(0.1, self.update_progress)
         self.skip_timer = self.set_timer(10.0, self.show_skip_btn)
@@ -161,29 +173,45 @@ class SearchLoadingModal(ModalScreen):
 
         async def safe_fetch(kw):
             async with semaphore:
-                return await self.fetch_all_managers(kw)
+                res = await self.fetch_all_managers(kw)
+                has_found = False
+                best_mgr = None
+                
+                if res:
+                    if self.preferred_mgr in res and res[self.preferred_mgr]:
+                        best_mgr = self.preferred_mgr
+                        has_found = True
+                    else:
+                        for m in ["apt", "snap", "flatpak", "pacman", "yay", "dnf", "zypper", "apk"]:
+                            if m in res and res[m]:
+                                best_mgr = m
+                                has_found = True
+                                break
+                
+                if has_found:
+                    log_view.write(f"[bold #9ece6a]✅ [{best_mgr}][/] {kw}")
+                else:
+                    log_view.write(f"[bold #ff5555]❌ [未找到][/] {kw}")
+                    
+                return kw, res
 
-        # ✨ 高速保送通道：分類哪些需要搜、哪些可以直接保送！
         keywords_to_search = []
         for item in input_packages:
             if isinstance(item, dict):
                 kw = item["name"]
                 mgr = item.get("mgr")
                 if mgr:
-                    # 🚀 VIP 保送！檔案裡已經有寫來源，直接存入成功清單，完全免搜尋！
                     self.resolved_dict.setdefault(kw, {}).setdefault(mgr, []).append(kw)
+                    log_view.write(f"[bold #9ece6a]✅ [VIP保送: {mgr}][/] {kw}")
                 else:
                     keywords_to_search.append(kw)
             else:
-                # 這是從「Z 鍵」手動輸入進來的純文字，沒有來源，乖乖去排隊搜尋
                 keywords_to_search.append(item)
 
-        # 建立每一個「需要搜尋的」關鍵字任務
         self.search_tasks = {}
         for kw in keywords_to_search:
             self.search_tasks[kw] = asyncio.create_task(safe_fetch(kw))
 
-        # ⏳ 只等待那些沒有被保送、需要實際去系統查的任務
         if self.search_tasks:
             try:
                 await asyncio.wait(self.search_tasks.values(), return_when=asyncio.ALL_COMPLETED)
@@ -194,29 +222,30 @@ class SearchLoadingModal(ModalScreen):
         self.anim_timer.stop()
         self.loader.progress = 100
 
-        # 📊 結算成績單
         unresolved = []
         for kw, task in self.search_tasks.items():
             if task.done() and not task.cancelled():
                 try:
-                    res = task.result()
+                    task_kw, res = task.result()
+                    has_any = False
                     if res:
-                        # 合併搜尋回來的結果
                         for found_mgr, found_pkgs in res.items():
                             if found_pkgs:
                                 self.resolved_dict.setdefault(kw, {}).setdefault(found_mgr, []).extend(found_pkgs)
-                    else:
-                        unresolved.append(kw)
+                                has_any = True
+                    if not has_any: unresolved.append(kw)
                 except Exception:
                     unresolved.append(kw)
             else:
                 unresolved.append(kw)
 
-        await asyncio.sleep(0.5)
-        self.build_tree_ui(unresolved)
+        # ✨ 關鍵改變：不自動跳轉！將結果存起來，顯示「結束並查看報告」按鈕
+        self.final_unresolved = unresolved
+        self.query_one("#btn-skip").styles.display = "none"
+        self.query_one("#btn-view-report").styles.display = "block"
+        self.query_one("#loader-status").update("[bold #9ece6a]✅ 搜尋任務已結束！請點擊右下角查看報告。[/]")
 
     def build_tree_ui(self, unresolved):
-        """建立雙層狀態樹狀圖"""
         self.query_one("#anim-section").styles.display = "none"
         self.query_one("#tree-section").styles.display = "block"
         
@@ -224,28 +253,32 @@ class SearchLoadingModal(ModalScreen):
         tree.clear()
         self.all_leaf_nodes = []
 
-        # 🌲 上層：已解析成功
         root_success = tree.root.add("✅ [bold #9ece6a]已解析成功[/] (勾選以直接安裝)", expand=True)
-        if not self.resolved_dict:
-            root_success.add_leaf("   (無)")
+        if not self.resolved_dict: root_success.add_leaf("   (無)")
             
         for kw, mgrs in self.resolved_dict.items():
             kw_node = root_success.add(f"🔑 關鍵字: [bold #e0af68]{kw}[/]", expand=True)
+            
+            best_mgr = self.preferred_mgr if self.preferred_mgr in mgrs and mgrs[self.preferred_mgr] else None
+            if not best_mgr:
+                for m in ["apt", "snap", "flatpak", "pacman", "yay", "dnf", "zypper", "apk"]:
+                    if m in mgrs and mgrs[m]:
+                        best_mgr = m
+                        break
+
             for mgr, pkgs in mgrs.items():
                 if not pkgs: continue
                 mgr_node = kw_node.add(f"📂 {mgr.upper()} 來源", expand=True)
                 for pkg in pkgs:
                     leaf = mgr_node.add_leaf(f"[ ] {pkg}", data={"type": "install", "mgr": mgr, "display": pkg, "selected": False})
                     self.all_leaf_nodes.append(leaf)
-                    # 智慧預設打勾
-                    if pkg == kw:
+                    
+                    if pkg == kw and mgr == best_mgr:
                         leaf.data["selected"] = True
                         leaf.set_label(f"[bold #9ece6a][X] {pkg}[/]")
 
-        # 🍂 下層：未解析或被中斷的項目
-        root_failed = tree.root.add("⏳ [bold #ff5555]未解析 / 尋找逾時[/] (勾選以繼續解析)", expand=True)
-        if not unresolved:
-            root_failed.add_leaf("   (無)")
+        root_failed = tree.root.add("⏳ [bold #ff5555]未解析 / 尋找逾時[/] (勾選以重新解析)", expand=True)
+        if not unresolved: root_failed.add_leaf("   (無)")
             
         for kw in unresolved:
             leaf = root_failed.add_leaf(f"[ ] {kw}", data={"type": "reparse", "display": kw, "selected": False})
@@ -254,7 +287,6 @@ class SearchLoadingModal(ModalScreen):
         tree.root.expand()
 
     async def perform_uninstall(self):
-        # ... (保留原本的卸載邏輯) ...
         await asyncio.sleep(0.5)
         fallback_mgr = "apt"
         for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
@@ -273,7 +305,6 @@ class SearchLoadingModal(ModalScreen):
         await asyncio.sleep(0.6)
         self.dismiss(" && ".join(cmd_list))
 
-    # ================= 樹狀圖與按鈕的互動事件 =================
     @on(Tree.NodeSelected, "#result-tree")
     def toggle_node(self, event: Tree.NodeSelected):
         node = event.node
@@ -288,12 +319,16 @@ class SearchLoadingModal(ModalScreen):
 
     @on(Button.Pressed)
     def handle_buttons(self, event: Button.Pressed):
-        # ⚡ 略過按鈕被按下：終止所有還在跑的搜尋任務
+        # ✨ 按鈕邏輯更新
         if event.button.id == "btn-skip":
             for task in getattr(self, "search_tasks", {}).values():
                 if not task.done():
                     task.cancel()
                     
+        elif event.button.id == "btn-view-report":
+            # 點擊報告按鈕後，才建立並顯示樹狀圖！
+            self.build_tree_ui(getattr(self, "final_unresolved", []))
+            
         elif event.button.id == "tree-cancel":
             self.dismiss(None)
             
@@ -301,7 +336,6 @@ class SearchLoadingModal(ModalScreen):
             selected_install = {}
             selected_reparse = []
 
-            # 收集勾選的資料
             for leaf in getattr(self, "all_leaf_nodes", []):
                 if leaf.data.get("selected"):
                     if leaf.data.get("type") == "install":
@@ -309,13 +343,11 @@ class SearchLoadingModal(ModalScreen):
                     elif leaf.data.get("type") == "reparse":
                         selected_reparse.append(leaf.data["display"])
             
-            # 🔄 優先判斷：如果有勾選「未解析」的項目，則觸發重新解析迴圈！
             if selected_reparse:
                 self.main_app.notify(f"🔄 收到指令！正在重新解析 {len(selected_reparse)} 個套件...")
                 asyncio.create_task(self.run_search_process(selected_reparse))
                 return
             
-            # 🚀 判斷：如果沒有要重跑的，就進入安裝環節
             if not selected_install:
                 self.main_app.notify("⚠️ 請至少勾選一個要安裝的套件！", severity="warning")
                 return
@@ -326,52 +358,6 @@ class SearchLoadingModal(ModalScreen):
                 if mgr == "apt": cmd_list.append(f"sudo apt install -y {pkgs_str}")
                 elif mgr == "snap": cmd_list.append(f"sudo snap install {pkgs_str}")
                 elif mgr == "flatpak": cmd_list.append(f"flatpak install -y {pkgs_str}")
-
-            final_cmd = " && ".join(cmd_list)
-            self.dismiss(final_cmd)
-            
-    # ================= 樹狀圖與按鈕的互動事件 =================
-    @on(Tree.NodeSelected, "#result-tree")
-    def toggle_node(self, event: Tree.NodeSelected):
-        """當使用者點擊樹狀圖的子節點時，切換勾選狀態"""
-        node = event.node
-        
-        # ✨ 移除掉不存在的 is_leaf，直接嚴謹檢查 data 裡面有沒有我們設定的字典！
-        if node.data is not None and isinstance(node.data, dict) and "selected" in node.data:
-            data = node.data
-            data["selected"] = not data["selected"]
-            
-            # 更新視覺標籤
-            if data["selected"]:
-                node.set_label(f"[bold #9ece6a][X] {data['pkg']}[/]")
-            else:
-                node.set_label(f"[ ] {data['pkg']}")
-
-    @on(Button.Pressed)
-    def handle_buttons(self, event: Button.Pressed):
-        if event.button.id == "tree-cancel":
-            self.dismiss(None)
-            
-        elif event.button.id == "tree-confirm":
-            selected_tasks = {}
-            for leaf in getattr(self, "all_leaf_nodes", []):
-                if leaf.data["selected"]:
-                    selected_tasks.setdefault(leaf.data["mgr"], []).append(leaf.data["pkg"])
-            
-            if not selected_tasks:
-                self.main_app.notify("⚠️ 請至少勾選一個套件！", severity="warning")
-                return
-            
-            cmd_list = []
-            for mgr, pkgs in selected_tasks.items():
-                pkgs_str = " ".join(pkgs)
-                if mgr == "apt": cmd_list.append(f"sudo apt install -y {pkgs_str}")
-                elif mgr == "snap": cmd_list.append(f"sudo snap install {pkgs_str}")
-                elif mgr == "flatpak": cmd_list.append(f"flatpak install -y {pkgs_str}")
-                elif mgr in ["pacman", "yay"]: cmd_list.append(f"sudo {mgr} -S --noconfirm {pkgs_str}")
-                elif mgr == "dnf": cmd_list.append(f"sudo dnf install -y {pkgs_str}")
-                elif mgr == "zypper": cmd_list.append(f"sudo zypper install -y {pkgs_str}")
-                elif mgr == "apk": cmd_list.append(f"sudo apk add {pkgs_str}")
 
             final_cmd = " && ".join(cmd_list)
             self.dismiss(final_cmd)
