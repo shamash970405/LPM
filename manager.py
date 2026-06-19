@@ -77,10 +77,13 @@ class EscMenuScreen(ModalScreen):
         with Vertical(id="esc-container"):
             yield Label("系統控制選單(歐批踢唉歐嗯)", id="esc-title")
             yield OptionList(
+
                 Option("⚙️ 系統設定", id="open_settings"), 
                 Option("📤 匯出套件", id="export_list"),
-                Option("📥 匯入套件", id="import_list"),  
+                Option("📥 匯入套件", id="import_list"),
+                Option("🔄 更新", id="update_system"),
                 Option("🚪 退出程式", id="quit")
+            
             )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -934,6 +937,114 @@ class LinuxPackageManagerApp(App):
                 from morefunction import SettingsScreen
                 self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", ""), current_ssh_mode, current_pref_mgr), apply_settings_callback)
 
+            # 🔄 處理系統與套件更新
+            elif action == "update_system":
+                from morefunction import UpdateChoiceModal, PackageUpdateModal
+
+                # ✨ 建立一個共用的執行引擎：負責判斷 SSH 模式，並處理背景刷新
+                def execute_update_cmd(final_cmd: str):
+                    if not final_cmd or final_cmd == "echo '無更新指令'" or final_cmd == "echo '找不到支援的更新指令'":
+                        self.notify("⚠️ 沒有產生有效的更新指令！", severity="warning")
+                        return
+
+                    if getattr(self, "ssh_mode", False):
+                        # 💻 SSH 模式：使用內建終端機
+                        from morefunction import CommandTerminalScreen
+                        def after_term(_=None):
+                            self.notify("🔄 更新完畢，正在重新掃描系統套件...")
+                            import asyncio
+                            asyncio.create_task(self.load_installed_packages())
+                        self.push_screen(CommandTerminalScreen(final_cmd), after_term)
+                    else:
+                        # 🖥️ 桌面模式：呼叫外部系統終端機
+                        import shutil, subprocess, os
+                        signal_file = "/tmp/lpm_refresh.tmp"
+                        if os.path.exists(signal_file):
+                            try: os.remove(signal_file)
+                            except Exception: pass
+
+                        terminal_cmd = None
+                        for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                            if shutil.which(term) is not None:
+                                terminal_cmd = term; break
+                        
+                        bash_cmd = f"{final_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
+                        
+                        try:
+                            if terminal_cmd == "gnome-terminal":
+                                subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
+                            elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                                subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
+                            else:
+                                subprocess.Popen(["bash", "-c", bash_cmd])
+                        except Exception as e:
+                            self.notify(f"❌ 啟動外部終端機失敗: {str(e)}", severity="error")
+                            return
+                        
+                        # 背景監聽外部終端機是否關閉
+                        async def exact_refresh():
+                            for _ in range(600):
+                                if os.path.exists(signal_file):
+                                    try: os.remove(signal_file)
+                                    except Exception: pass
+                                    try:
+                                        await self.load_installed_packages()
+                                        self.notify("📦 更新任務完成，套件清單已即時同步！")
+                                    except Exception: pass
+                                    break
+                                import asyncio
+                                await asyncio.sleep(1)
+                        import asyncio
+                        asyncio.create_task(exact_refresh())
+
+                # ========================================================
+
+                def handle_update_choice(choice: str | None) -> None:
+                    if not choice: return
+                    
+                    # 💻 模式一：全系統大升級與垃圾回收
+                    if choice == "system_update":
+                        cmd = []
+                        if self.sys_status.get("apt"): cmd.append("sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y")
+                        if self.sys_status.get("snap"): cmd.append("sudo snap refresh")
+                        if self.sys_status.get("flatpak"): cmd.append("flatpak update -y")
+                        if self.sys_status.get("pacman"): cmd.append("sudo pacman -Syu --noconfirm")
+                        
+                        final_cmd = " && ".join(cmd) if cmd else "echo '找不到支援的更新指令'"
+                        # ✨ 透過共用引擎發射
+                        execute_update_cmd(final_cmd)
+
+                    # 📦 模式二：選擇個別套件更新
+                    elif choice == "package_update":
+                        table = self.query_one("#installed-packages-table")
+                        package_data = []
+                        import re
+                        for row_key in table.rows:
+                            row = table.get_row(row_key)
+                            mgr = re.sub(r'\[.*?\]', '', str(row[0])).strip()
+                            name = re.sub(r'\[.*?\]', '', str(row[1])).strip()
+                            package_data.append({"mgr": mgr, "name": name})
+                        
+                        def handle_package_update(selected_pkgs: dict | None) -> None:
+                            if not selected_pkgs: return
+                            
+                            cmd = []
+                            for mgr, pkgs in selected_pkgs.items():
+                                pkgs_str = " ".join(pkgs)
+                                if mgr == "apt": cmd.append(f"sudo apt --only-upgrade install -y {pkgs_str}")
+                                elif mgr == "snap": cmd.append(f"sudo snap refresh {pkgs_str}")
+                                elif mgr == "flatpak": cmd.append(f"flatpak update -y {pkgs_str}")
+                                elif mgr == "pacman": cmd.append(f"sudo pacman -S --needed --noconfirm {pkgs_str}")
+                                elif mgr == "yay": cmd.append(f"yay -S --needed --noconfirm {pkgs_str}")
+                            
+                            final_cmd = " && ".join(cmd) if cmd else "echo '無更新指令'"
+                            # ✨ 透過共用引擎發射
+                            execute_update_cmd(final_cmd)
+
+                        self.push_screen(PackageUpdateModal(package_data), handle_package_update)
+
+                self.push_screen(UpdateChoiceModal(), handle_update_choice)
+            
             elif action == "export_list":
                 from morefunction import ExportModal
                 def clean_text(raw_data):

@@ -128,17 +128,24 @@ class CommandTerminalScreen(ModalScreen):
     
     CSS = """
     CommandTerminalScreen { align: center middle; background: rgba(0, 0, 0, 0.8); }
-    #cmd-container { width: 85%; height: 85%; background: #1f2335; border: thick #7aa2f7; padding: 1; }
-    #cmd-title { text-align: center; text-style: bold; color: #e0af68; margin-bottom: 1; }
+    
+    /* ✨ 把整個視窗拉到最大 (90%) */
+    #cmd-container { width: 90%; height: 90%; background: #1f2335; border: thick #7aa2f7; padding: 1 2; }
+    #cmd-title { text-align: center; text-style: bold; color: #e0af68; margin-bottom: 1; height: auto; }
+    
+    /* 🚀 關鍵魔法：強制讓預覽框吃掉所有剩餘高度 (1fr) */
     #cmd-log { height: 1fr; border: solid #565f89; background: #1a1b26; margin-bottom: 1; }
-    /* ✨ 新增輸入框的樣式 */
-    #cmd-input { margin-bottom: 1; border: solid #7aa2f7; background: #16161e; }
-    .cmd-btn-box { height: auto; align: center middle; }
+    
+    /* 🔒 鎖死輸入框與按鈕列的高度，不讓它們作怪 */
+    #cmd-input { height: 3; margin-bottom: 1; border: solid #7aa2f7; background: #16161e; }
+    .cmd-btn-box { height: 3; align: center middle; }
     """
 
     def __init__(self, command: str) -> None:
         super().__init__()
         self.command = command
+        
+    # ... (底下的 compose 與其他函式完全不用動，維持原樣即可) ...
 
     def compose(self) -> ComposeResult:
         with Vertical(id="cmd-container"):
@@ -472,3 +479,98 @@ class ImportModal(ModalScreen):
                 return
                 
             self.dismiss({"path": path, "ignore_version": ignore_version})
+
+# ================= 🔄 系統與套件更新選擇跳窗 =================
+class UpdateChoiceModal(ModalScreen):
+    """選擇全系統更新或個別套件更新"""
+    CSS = """
+    UpdateChoiceModal { align: center middle; background: rgba(0, 0, 0, 0.7); }
+    #update-choice-container { width: 45; height: auto; background: #1f2335; border: thick #9ece6a; padding: 1; }
+    #update-choice-title { text-align: center; text-style: bold; color: #9ece6a; margin-bottom: 1; }
+    """
+    def compose(self) -> ComposeResult:
+        with Vertical(id="update-choice-container"):
+            yield Label("🔄 系統與套件更新中心", id="update-choice-title")
+            yield OptionList(
+                Option("💻 全系統升級與垃圾回收 (推薦)", id="system_update"),
+                Option("📦 選擇個別套件更新", id="package_update")
+            )
+            
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+# ================= 📦 個別套件更新清單跳窗 =================
+from textual.widgets import Tree
+
+class PackageUpdateModal(ModalScreen):
+    """顯示已安裝套件列表，支援全選與個別勾選更新"""
+    CSS = """
+    PackageUpdateModal { align: center middle; background: rgba(0, 0, 0, 0.85); }
+    #pkg-update-container { width: 75; height: 90%; background: #1f2335; border: thick #7aa2f7; padding: 2 4; }
+    #pkg-update-tree { height: 1fr; border: solid #565f89; background: #1a1b26; margin-bottom: 1; margin-top: 1; }
+    .pkg-btn-box { height: auto; align: right middle; margin-top: 1; }
+    #btn-update-cancel { margin-right: 1; }
+    #btn-select-all { margin-right: 1; }
+    """
+    def __init__(self, package_data):
+        super().__init__()
+        self.package_data = package_data
+        self.all_leaf_nodes = []
+        self.is_all_selected = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pkg-update-container"):
+            yield Label("📦 [bold #7aa2f7]請勾選要更新的套件[/] (可全選)：", classes="section-title")
+            yield Tree("系統已安裝套件", id="pkg-update-tree")
+            with Horizontal(classes="pkg-btn-box"):
+                yield Button("全選 / 全不選", id="btn-select-all", variant="primary")
+                yield Button("取消", id="btn-update-cancel", variant="error")
+                yield Button("確認更新 🚀", id="btn-update-confirm", variant="success")
+
+    def on_mount(self):
+        tree = self.query_one("#pkg-update-tree", Tree)
+        tree.root.expand()
+        
+        # 🧠 依管理員分組，避免 2000 個套件散成一團
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for pkg in self.package_data:
+            groups[pkg["mgr"]].append(pkg["name"])
+        
+        for mgr in sorted(groups.keys()):
+            # 預設先摺疊起來 (expand=False)，才不會一打開視窗就卡死
+            mgr_node = tree.root.add(f"📂 {mgr.upper()} 來源", expand=False) 
+            for pkg_name in sorted(groups[mgr]):
+                leaf = mgr_node.add_leaf(f"[ ] {pkg_name}", data={"mgr": mgr, "name": pkg_name, "selected": False})
+                self.all_leaf_nodes.append(leaf)
+
+    @on(Tree.NodeSelected, "#pkg-update-tree")
+    def toggle_node(self, event: Tree.NodeSelected):
+        node = event.node
+        if node.data is not None and "selected" in node.data:
+            node.data["selected"] = not node.data["selected"]
+            if node.data["selected"]:
+                node.set_label(f"[bold #9ece6a][X] {node.data['name']}[/]")
+            else:
+                node.set_label(f"[ ] {node.data['name']}")
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        if event.button.id == "btn-update-cancel":
+            self.dismiss(None)
+        
+        elif event.button.id == "btn-select-all":
+            self.is_all_selected = not self.is_all_selected
+            for leaf in self.all_leaf_nodes:
+                leaf.data["selected"] = self.is_all_selected
+                if self.is_all_selected:
+                    leaf.set_label(f"[bold #9ece6a][X] {leaf.data['name']}[/]")
+                else:
+                    leaf.set_label(f"[ ] {leaf.data['name']}")
+                    
+        elif event.button.id == "btn-update-confirm":
+            selected = {}
+            for leaf in self.all_leaf_nodes:
+                if leaf.data.get("selected"):
+                    selected.setdefault(leaf.data["mgr"], []).append(leaf.data["name"])
+            self.dismiss(selected)
