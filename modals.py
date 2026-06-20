@@ -133,50 +133,86 @@ class SearchLoadingModal(ModalScreen):
         async def fetch_candidates(mgr_name, keyword):
             import shutil
             try:
-                # 🚀 防彈核心 1：透過 shutil.which 抓取「絕對路徑」，無懼 /bin/sh 環境變數遺失！
-                # 🚀 防彈核心 2：加入 2>/dev/null 將報錯丟入黑洞，確保 stdout 乾淨
-                # 🚀 防彈核心 3：decode 加入 errors='ignore'，無視任何編碼報錯
+                # 🛡️ 安全過濾與連字號轉換：將 "google chro" 轉為 "google-chro"
+                keyword = keyword.replace("'", "")
+                kw_lower = keyword.lower().strip()
+                kw_hyphen = kw_lower.replace(" ", "-")
+                
+                # 🚀 放大終端機抓取量到 50 筆，避免真正的套件被截斷
+                fetch_limit = 50
+                out_names = []
                 
                 if mgr_name == "apt":
                     cmd = shutil.which("apt-cache") or "apt-cache"
-                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --names-only '{keyword}' 2>/dev/null | awk '{{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --names-only '{keyword}' 2>/dev/null | awk '{{print $1}}' | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("apt", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
                     
                 elif mgr_name == "snap":
                     cmd = shutil.which("snap") or "snap"
-                    proc = await asyncio.create_subprocess_shell(f"{cmd} find '{keyword}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} find '{keyword}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("snap", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "No" not in n])
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "No" not in n]
                     
                 elif mgr_name == "flatpak":
                     cmd = shutil.which("flatpak") or "flatpak"
-                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --columns=application '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --columns=application '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "Application" not in n and "---" not in n]
-                    return ("flatpak", names)
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "Application" not in n and "---" not in n]
                     
                 elif mgr_name == "pacman":
                     cmd = shutil.which("pacman") or "pacman"
-                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("pacman", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
                     
                 elif mgr_name == "yay":
                     cmd = shutil.which("yay") or "yay"
-                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("yay", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
                     
                 elif mgr_name == "paru":
                     cmd = shutil.which("paru") or "paru"
-                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n 8", stdout=asyncio.subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
                     out, _ = await proc.communicate()
-                    return ("paru", [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n])
-                    
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
+                
+                # 🧠 核心精準度演算法：幫抓出來的套件打分數 (越小越優先)
+                def rank_pkg(pkg):
+                    pkg_l = pkg.lower()
+                    # 階級 0: 完全命中
+                    if pkg_l == kw_hyphen or pkg_l == kw_lower: return 0
+                    # 階級 1: 開頭完全吻合 (例如 google-chrome)
+                    if pkg_l.startswith(kw_hyphen) or pkg_l.startswith(kw_lower): return 1
+                    # 階級 2: 名字裡面包含連字號關鍵字
+                    if kw_hyphen in pkg_l: return 2
+                    # 階級 3: 包含以空白分割的所有單字 (google, chro)
+                    parts = kw_lower.split()
+                    if all(p in pkg_l for p in parts): return 3
+                    # 階級 4: 其他靠描述混進來的雜魚
+                    return 4
+
+                # 依據精準度排序，然後只取最前面的 8 個精華！
+                sorted_names = sorted(out_names, key=rank_pkg)
+                return (mgr_name, sorted_names[:8])
+
             except Exception: 
-                pass # 如果真的發生核爆級錯誤，安靜地退回空陣列，不卡死主程式
+                pass 
             return (mgr_name, [])
+
+        # 任務派發
+        if sys_status.get("apt"): tasks.append(fetch_candidates("apt", kw))
+        if sys_status.get("snap"): tasks.append(fetch_candidates("snap", kw))
+        if sys_status.get("flatpak"): tasks.append(fetch_candidates("flatpak", kw))
+        
+        # Arch 專屬防禦
+        if sys_status.get("yay"): tasks.append(fetch_candidates("yay", kw))
+        elif sys_status.get("paru"): tasks.append(fetch_candidates("paru", kw))
+        elif sys_status.get("pacman"): tasks.append(fetch_candidates("pacman", kw))
+
+        fetched_results = await asyncio.gather(*tasks)
+        return {mgr: names for mgr, names in fetched_results if names}
 
         # 任務派發
         if sys_status.get("apt"): tasks.append(fetch_candidates("apt", kw))
@@ -323,23 +359,26 @@ class SearchLoadingModal(ModalScreen):
         tree.root.expand()
 
     async def perform_uninstall(self):
+        import asyncio
         await asyncio.sleep(0.5)
+        
+        # 自動判斷最適合的管理員 (Arch 優先判斷 yay/paru)
         fallback_mgr = "apt"
-        for test_mgr in ["pacman", "yay", "dnf", "zypper", "apk"]:
-            if self.main_app.sys_status.get(test_mgr): fallback_mgr = test_mgr; break
+        for test_mgr in ["yay", "paru", "pacman", "dnf", "zypper", "apk"]:
+            if self.main_app.sys_status.get(test_mgr): 
+                fallback_mgr = test_mgr
+                break
+        
         mgr = self.preferred_mgr if self.main_app.sys_status.get(self.preferred_mgr) else fallback_mgr
         
-        cmd_list = []
-        pkgs_str = " ".join(self.raw_packages)
-        if mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
-        elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
-        elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
+        # ✨ 呼叫大腦，一句話搞定所有發行版的卸載！
+        final_cmd = self.main_app.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=self.raw_packages)
         
         self.anim_timer.stop()
         self.loader.progress = 100
         self.status_label.update("✅ 指令建構完畢！")
         await asyncio.sleep(0.6)
-        self.dismiss(" && ".join(cmd_list))
+        self.dismiss(final_cmd)
 
     @on(Tree.NodeSelected, "#result-tree")
     def toggle_node(self, event: Tree.NodeSelected):
@@ -381,19 +420,18 @@ class SearchLoadingModal(ModalScreen):
             
             if selected_reparse:
                 self.main_app.notify(f"🔄 收到指令！正在重新解析 {len(selected_reparse)} 個套件...")
+                import asyncio
                 asyncio.create_task(self.run_search_process(selected_reparse))
                 return
             
             if not selected_install:
-                self.main_app.notify("⚠️ 請至少勾選一個要安裝的套件！", severity="warning")
+                self.main_app.notify("⚠️ 請至少勾選一個要處理的套件！", severity="warning")
                 return
             
+            # ✨ 這裡就是關鍵！全面呼叫 sys_info 大腦來幫我們產生完美的安裝指令！
             cmd_list = []
             for mgr, pkgs in selected_install.items():
-                pkgs_str = " ".join(pkgs)
-                if mgr == "apt": cmd_list.append(f"sudo apt install -y {pkgs_str}")
-                elif mgr == "snap": cmd_list.append(f"sudo snap install {pkgs_str}")
-                elif mgr == "flatpak": cmd_list.append(f"flatpak install -y {pkgs_str}")
+                cmd_list.append(self.main_app.sys_info.build_command(mgr=mgr, action="install", pkgs=pkgs))
 
             final_cmd = " && ".join(cmd_list)
             self.dismiss(final_cmd)
