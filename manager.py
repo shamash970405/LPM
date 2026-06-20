@@ -921,10 +921,21 @@ class LinuxPackageManagerApp(App):
                         else:
                             self.notify(f"⚠️ 已切換至 {selected_engine.upper()}，但您尚未輸入 API 金鑰哦！", severity="warning")
 
+                # ... 上面原本的程式碼 ...
                 current_ssh_mode = getattr(self, "ssh_mode", False)
                 current_pref_mgr = getattr(self, "preferred_mgr", "apt")
                 from morefunction import SettingsScreen
-                self.push_screen(SettingsScreen(getattr(self, "current_gemini_token", ""), current_ssh_mode, current_pref_mgr), apply_settings_callback)
+                
+                # ✨ 把 self.sys_status 當作第四個參數傳進去！
+                self.push_screen(
+                    SettingsScreen(
+                        getattr(self, "current_gemini_token", ""), 
+                        current_ssh_mode, 
+                        current_pref_mgr, 
+                        self.sys_status
+                    ), 
+                    apply_settings_callback
+                )
 
             # 🔄 處理系統與套件更新
             elif action == "update_system":
