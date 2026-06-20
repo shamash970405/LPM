@@ -71,3 +71,31 @@ LPM 的核心哲學是將 Linux 系統中繁雜、分散的套件管理通路（
 ├── sys_info.py        # 🐧 底層系統探針：全自動硬體環境偵測、OS識別、硬碟進度條計算
 ├── search.py          # 🔍 搜尋列核心：專職處理 Input 欄位的非同步高效防抖 (Debounce)
 └── theme.py           # 🎨 佈景主題管理：負責全自動 CSS Fallback 機制與全域色彩矩陣管理
+
+```
+
+## 🛠️ 安裝與依賴環境
+
+本專案採用 **Python 3.10+** 開發，且已完整測試過最新環境相容性。請在專案目錄下依序執行以下指令來初始化環境：
+
+```bash
+# 1. 下載此專案
+git clone https://github.com/shamash970405/LPM.git
+
+# 2. 切換進專案資料夾
+cd ~/LPM
+
+# 3. 建立並啟用 Python 虛擬環境
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 4. 一鍵安裝官方標準相容依賴套件（包含 Textual 與 Google GenAI）
+pip install -r requirements.txt 
+
+# 5. 一鍵安裝官方標準相容依賴套件（包含 Textual 與 Google GenAI）
+pip install -r requirements.txt
+
+# 6. 執行該專案
+python3 Mmanager.py
+```
+我知道有點麻煩ww再忍耐一下就好,之後會變成apt
