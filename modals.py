@@ -380,9 +380,18 @@ class SearchLoadingModal(ModalScreen):
 
     async def perform_uninstall(self):
         import asyncio
+        
+        # ✨ 1. 開啟載入畫面並啟動呼吸動畫，解決沒有計時器的 Bug
+        self.query_one("#anim-section").styles.display = "block"
+        self.query_one("#tree-section").styles.display = "none"
+        self.query_one("#btn-skip").styles.display = "none"
+        self.query_one("#btn-view-report").styles.display = "none"
+        self.anim_timer = self.set_interval(0.1, self.update_progress)
+
+        # 假裝思考一下，讓使用者看得到動畫 😎
         await asyncio.sleep(0.5)
         
-        # 自動判斷最適合的管理員 (Arch 優先判斷 yay/paru)
+        # 2. 自動判斷最適合的管理員 (Arch 優先判斷 yay/paru)
         fallback_mgr = "apt"
         for test_mgr in ["yay", "paru", "pacman", "dnf", "zypper", "apk"]:
             if self.main_app.sys_status.get(test_mgr): 
@@ -391,12 +400,17 @@ class SearchLoadingModal(ModalScreen):
         
         mgr = self.preferred_mgr if self.main_app.sys_status.get(self.preferred_mgr) else fallback_mgr
         
-        # ✨ 呼叫大腦，一句話搞定所有發行版的卸載！
+        # 3. 呼叫 sys_info 大腦，產生卸載指令
         final_cmd = self.main_app.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=self.raw_packages)
         
-        self.anim_timer.stop()
+        # ✨ 4. 安全地停止動畫
+        if hasattr(self, "anim_timer"):
+            self.anim_timer.stop()
+            
         self.loader.progress = 100
-        self.status_label.update("✅ 指令建構完畢！")
+        self.status_label.update("✅ 卸載指令建構完畢！")
+        
+        # 稍微停頓 0.6 秒讓使用者看到打勾，再把指令傳出去
         await asyncio.sleep(0.6)
         self.dismiss(final_cmd)
 
