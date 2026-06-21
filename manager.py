@@ -1,4 +1,53 @@
 import os
+import sys
+import subprocess
+import urllib.request
+
+def pre_flight_check():
+    """LPM 啟動前置自檢與自動修復引擎"""
+    print("🔍 [LPM 自檢系統] 正在檢查執行環境...")
+    
+    # 📦 1. 檢查並自動安裝缺少的 Python 依賴套件
+    required_packages = {
+        "textual": "textual",
+        "google.genai": "google-genai"
+    }
+    
+    for module_name, pip_name in required_packages.items():
+        try:
+            __import__(module_name)
+        except ImportError:
+            print(f"📦 發現缺少必備套件：{pip_name}，正在自動為您下載安裝...")
+            try:
+                # 呼叫系統底層的 pip 執行安裝
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name, "--quiet"])
+                print(f"✅ {pip_name} 自動安裝完成！")
+            except Exception as e:
+                print(f"❌ 無法自動安裝 {pip_name}，請手動執行：pip install {pip_name}")
+                sys.exit(1)
+
+    # 📄 2. 檢查並自動下載缺少的 LPM 核心檔案 (從你的 GitHub 專案自動抓取)
+    core_files = ["modals.py", "morefunction.py", "sys_info.py", "theme.py", "search.py"]
+    # 這裡直接對接你的 GitHub Raw 網址
+    repo_base_url = "https://raw.githubusercontent.com/shamash970405/LPM/main/"
+    
+    for file in core_files:
+        if not os.path.exists(file):
+            print(f"📄 發現缺少核心檔案：{file}，正在從雲端自動修復...")
+            try:
+                urllib.request.urlretrieve(repo_base_url + file, file)
+                print(f"✅ {file} 下載修復完成！")
+            except Exception as e:
+                print(f"❌ 無法下載 {file}，請確認網路連線或重新 Clone 專案！")
+                sys.exit(1)
+
+# 🚀 在程式一啟動時，攔截並執行自檢程序！
+pre_flight_check()
+
+# =====================================================================
+# 確保自檢通過後，才開始載入原本的模組，這樣就絕對不會報錯了！
+
+import os
 import shutil
 import asyncio
 import subprocess
