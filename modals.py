@@ -116,13 +116,33 @@ class SearchLoadingModal(ModalScreen):
             self.search_process_task = asyncio.create_task(self.perform_uninstall())
 
     def update_progress(self):
+        # 1. 處理上方旗幟進度條的動畫
         if self.loader.progress < 90:
+            import random
             self.loader.progress += random.uniform(1, 3)
             
-        self.mgr_idx = getattr(self, "mgr_idx", 0) + 1
-        current_mgr = self.mgrs[self.mgr_idx % len(self.mgrs)]
-        self.status_label.update(f"尋找中.....wait a minute\n正在尋找 {current_mgr}")
+        # 2. 處理下方會呼吸的點點動畫
+        # 初始化動畫狀態與點點數量
+        if not hasattr(self, "dot_count"):
+            self.dot_count = 1
+            self.dot_growing = True
 
+        # 根據目前狀態決定點點要變長還是變短 (範圍 1~6 個點)
+        if self.dot_growing:
+            self.dot_count += 1
+            if self.dot_count >= 6:
+                self.dot_growing = False
+        else:
+            self.dot_count -= 1
+            if self.dot_count <= 1:
+                self.dot_growing = True
+
+        # 產生變動的點點字串
+        animated_dots = "." * self.dot_count
+        
+        # 3. 更新標籤文字 (加入你專屬的迷因標語)
+        self.status_label.update(f"正在尋找.....wait a minute who are you{animated_dots}")
+        
     def show_skip_btn(self):
         self.query_one("#btn-skip").styles.display = "block"
 
