@@ -99,10 +99,3 @@ pip install -r requirements.txt
 python3 Mmanager.py
 ```
 我知道有點麻煩ww再忍耐一下就好,之後會變成apt
-
-## 📦 一鍵安裝 
-
-打開你的終端機，直接複製並貼上以下指令，系統會全自動完成目錄建立、下載與全域指令綁定：
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/shamash970405/LPM/main/install.sh)"
