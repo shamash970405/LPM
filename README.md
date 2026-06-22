@@ -96,6 +96,6 @@ pip install -r requirements.txt
 pip install -r requirements.txt
 
 # 6. 執行該專案
-python3 Mmanager.py
+python3 manager.py
 ```
 我知道有點麻煩ww再忍耐一下就好,之後會變成apt
