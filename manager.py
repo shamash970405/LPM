@@ -177,6 +177,10 @@ class LinuxPackageManagerApp(App):
     
     /* 🎯 讓純文字標籤在滑鼠移上去時有手勢提示，並增加點擊回饋感 */
     .status-label:hover { color: #bb9af3; text-style: underline; }
+
+    /* 🎯 沒安裝的套件管理員專屬樣式 */
+    .uninstalled-label { color: #565f89; text-style: italic; }
+    .uninstalled-label:hover { color: #7dcfff; text-style: bold underline; }
     """
 
     def __init__(self) -> None:
@@ -413,10 +417,22 @@ class LinuxPackageManagerApp(App):
             # ⬅️ 左欄：系統狀態與硬碟資訊
             with Vertical(classes="left-pane", id="left-pane"):
                 yield Label(f"  發行版：[bold #9ece6a]{self.sys_info.get_os_name()}[/]", classes="status-label")
+                
                 for mgr, avail in self.sys_status.items():
                     if avail:
-                        yield Label(f"   - {mgr} (計算中...)", id=f"lbl-{mgr}", classes="status-label")
-                yield Label(self.sys_info.get_disk_info(), classes="disk-label")            
+                        # 已經安裝的，正常顯示並等待計算數量
+                        lbl = Label(f"   - {mgr} (計算中...)", id=f"lbl-{mgr}", classes="status-label")
+                        lbl.styles.interactive = True  # 🔮 強制開啟滑鼠互動靈魂！
+                        yield lbl
+                    else:
+                        # ✨ 如果沒安裝，且是通用型沙盒工具，就顯示一鍵安裝按鈕！
+                        if mgr in ["snap", "flatpak"]:
+                            lbl = Label(f"   - {mgr} (🚀 等你來按我就裝)", id=f"install-{mgr}", classes="status-label uninstalled-label")
+                            lbl.styles.interactive = True  # 🔮 強制開啟滑鼠互動靈魂！
+                            yield lbl
+                
+                # 硬碟資訊放在迴圈結束後的底部
+                yield Label(self.sys_info.get_disk_info(), classes="disk-label")
             
             # ➡️ 右欄：Gemini AI 查詢面板
             with Vertical(classes="right-pane"):
@@ -444,14 +460,26 @@ class LinuxPackageManagerApp(App):
         asyncio.create_task(self.load_installed_packages())
 
     # 鼠标隐形点击术事件接收器
+    # 鼠标隐形点击术事件接收器
     def on_click(self, event: __import__("textual").events.Click) -> None:
-        # 🎯 透過 event.control 安全撈取觸發點擊的組件
-        if hasattr(event, "control") and event.control:
-            target_id = event.control.id
-        else:
-            return  # 如果點到空白處、沒有組件控制權，直接安全跳出
+        # 🎯 終極正確版：Textual 的 Click 事件只帶座標，我們用「螢幕座標」反查點擊到了誰！
+        try:
+            target_widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+            if not target_widget or not target_widget.id:
+                return 
+            target_id = target_widget.id
+        except Exception:
+            # 如果點到螢幕外或沒有元件的地方，就安全退出
+            return
         
-        # 🎯 根據點擊的標籤 id，精準切換置頂來源
+        # ✨ 攔截「一鍵安裝」的點擊事件
+        if target_id == "install-snap":
+            self.trigger_install_manager("snap")
+            return
+        elif target_id == "install-flatpak":
+            self.trigger_install_manager("flatpak")
+            return
+        
         # 🎯 根據點擊的標籤 id，精準切換置頂來源
         if target_id == "lbl-pacman": self.current_priority_manager = "pacman"
         elif target_id == "lbl-yay": self.current_priority_manager = "yay"
@@ -471,7 +499,7 @@ class LinuxPackageManagerApp(App):
             
         # 🚀 帶著搜尋框關鍵字，滿血洗牌刷新 5 欄位表格！
         current_keyword = self.query_one("#pkg-input").value if hasattr(self, 'query_one') else ""
-        self.refresh_table_view(search_text=current_keyword, sort_by=self.current_sort)
+        self.refresh_table_view(search_text=current_keyword, sort_by=getattr(self, "current_sort", "name"))
 
     # 🎯 點擊表頭排序的核心觸發區 (Textual 原生極速渲染版)
     def on_data_table_header_selected(self, event: __import__("textual").widgets.DataTable.HeaderSelected) -> None:
@@ -1271,6 +1299,46 @@ class LinuxPackageManagerApp(App):
                 
         self.push_screen(EscMenuScreen(), handle_esc_callback)
 
+    def trigger_install_manager(self, target_mgr: str) -> None:
+        """🚀 智能判斷底層系統，並自動安裝缺少的 Snap 或 Flatpak"""
+        cmd = ""
+        pkg_name = "snapd" if target_mgr == "snap" else "flatpak"
+
+        # 🧠 判斷主系統的套件管理員
+        if self.sys_status.get("apt"):
+            cmd = f"sudo apt update && sudo apt install -y {pkg_name}"
+        elif self.sys_status.get("pacman") or self.sys_status.get("yay"):
+            cmd = f"sudo pacman -S --noconfirm {pkg_name}"
+        elif self.sys_status.get("dnf"):
+            cmd = f"sudo dnf install -y {pkg_name}"
+        else:
+            self.notify(f"❌ 無法判斷您的底層系統，請手動安裝 {pkg_name}！", severity="error")
+            return
+
+        self.notify(f"🚀 正在為您準備 {target_mgr.upper()} 的安裝環境...")
+
+        # 🖥️ 呼叫外部終端機執行安裝 (與你的更新系統邏輯共用)
+        import shutil, subprocess
+        terminal_cmd = None
+        for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+            if shutil.which(term) is not None:
+                terminal_cmd = term
+                break
+        
+        bash_cmd = f"{cmd}; read -p '安裝完畢！請按 [Enter] 關閉視窗，並重新啟動 LPM 即可生效...'"
+        
+        try:
+            if terminal_cmd == "gnome-terminal":
+                subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
+            elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
+            else:
+                subprocess.Popen(["bash", "-c", bash_cmd])
+        except Exception as e:
+            self.notify(f"❌ 啟動安裝程序失敗: {str(e)}", severity="error")
+
 if __name__ == "__main__":
     app = LinuxPackageManagerApp()
     app.run()
+
+   
