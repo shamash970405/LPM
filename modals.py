@@ -1,15 +1,16 @@
 import os
+import sys
 import shutil
-import asyncio
-import subprocess
 import random
-
+import asyncio
+import platform
+import subprocess
 from textual import on
+from rich.text import Text
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Label, Input, RadioSet, RadioButton, Button, Static, Tree, RichLog
-from textual.reactive import reactive
-from rich.text import Text
+from textual.widgets import Label, Input, RadioSet, RadioButton, Button, Static, Tree, RichLog, Markdown
 
 # ================= 🏳️‍⚧️ MTF 像素旗幟載入動畫元件 =================
 class TransFlagLoader(Static):
@@ -582,3 +583,74 @@ class BatchActionModal(ModalScreen):
 
             preferred = getattr(self.main_app, "preferred_mgr", "apt")
             self.main_app.push_screen(SearchLoadingModal(self.main_app, raw_packages, preferred, is_install), after_search)
+
+class SysInfoPreviewModal(ModalScreen):
+    """顯示並自動複製系統資訊的彈出視窗"""
+    
+    # 專屬的 CSS 排版，讓視窗置中且美觀
+    CSS = """
+    SysInfoPreviewModal {
+        align: center middle;
+    }
+    #sys_info_dialog {
+        width: 60%;
+        height: auto;
+        padding: 1 2;
+        background: $surface;
+        border: thick $primary;
+    }
+    #sys_info_dialog .buttons {
+        width: 100%;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self):
+        super().__init__()
+        # 初始化時就先將系統資訊收集完畢
+        self.sys_info_text = self.generate_sys_info()
+
+    def generate_sys_info(self):
+        """蒐集四大核心情報"""
+        # 嘗試讀取 Linux 發行版名稱 (例如 Ubuntu 26.04)
+        distro_name = "Unknown Linux"
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        distro_name = line.split("=")[1].strip().strip('"')
+                        break
+        except Exception:
+            pass
+
+        # 組合 Markdown 格式的報告
+        return f"""### 🐛 LPM 系統除錯資訊 (Debug Info)
+- **作業系統**: {distro_name}
+- **核心版本**: {platform.release()}
+- **Python 版本**: {sys.version.split()[0]}
+- **執行環境**: {'AppImage 獨立封裝' if 'APPIMAGE' in os.environ else '本地原始碼'}
+- **終端機類型**: {os.environ.get('TERM', 'Unknown')}
+"""
+
+    def compose(self):
+        """構建 UI 畫面"""
+        with Vertical(id="sys_info_dialog"):
+            yield Markdown(self.sys_info_text)
+            with Horizontal(classes="buttons"):
+                yield Button("✅ 資訊已複製，關閉視窗", variant="success", id="btn_close_info")
+
+    def on_mount(self):
+        """視窗掛載完成時，自動執行剪貼簿複製與通知"""
+        try:
+            # 呼叫 Textual 內建的剪貼簿 API
+            self.app.copy_to_clipboard(self.sys_info_text)
+            self.app.notify("系統資訊已成功複製到剪貼簿！可以直接貼給開發者囉！", title="📋 複製成功")
+        except Exception as e:
+            # 防呆機制：如果使用者的 Linux 缺少 xclip/wl-clipboard 等底層剪貼簿工具
+            self.app.notify("自動複製失敗，請使用滑鼠手動圈選文字複製。", severity="warning")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        """處理按鈕點擊事件"""
+        if event.button.id == "btn_close_info":
+            self.app.pop_screen()

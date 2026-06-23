@@ -122,6 +122,8 @@ class SettingsScreen(ModalScreen):
                     id="setting-pref-mgr", classes="setting-control"
                 )
 
+            yield Button("📋 預覽並複製系統資訊 (Debug Info)", id="btn_copy_sys_info", variant="primary")
+
             with Horizontal(classes="settings-btn-box"):
                 yield Button("取消", id="setting-cancel", variant="error")
                 yield Button("儲存設定 💾", id="setting-save", variant="success")
@@ -149,6 +151,15 @@ class SettingsScreen(ModalScreen):
                 "ssh_mode": ssh_mode, 
                 "preferred_mgr": pref_mgr
             })
+        
+        if event.button.id == "btn_copy_sys_info":
+            # 防止事件繼續往上傳遞觸發其他東西
+            event.stop() 
+            
+            # 從 modals 引入我們剛剛做好的彈出視窗
+            from modals import SysInfoPreviewModal 
+            self.app.push_screen(SysInfoPreviewModal())
+            return
 
 # ================= 💻 內建終端機執行跳窗 (SSH 專用) =================
 class CommandTerminalScreen(ModalScreen):
