@@ -48,24 +48,25 @@ pre_flight_check()
 # 確保自檢通過後，才開始載入原本的模組，這樣就絕對不會報錯了！
 
 import os
+import socket
 import shutil
 import asyncio
 import subprocess
-import socket
 from google import genai
-from datetime import datetime
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from theme import ThemeManager
-from textual.widgets import Header, Footer, Input, Markdown, Label, DataTable, OptionList, Button 
-from textual.widgets.option_list import Option
-from textual.screen import ModalScreen
-from morefunction import ThemeMenuScreen
-from morefunction import SettingsScreen
-from modals import BatchActionModal
-from morefunction import ExportModal
-from textual.binding import Binding
 from sys_info import SysInfo
+from datetime import datetime
+from theme import ThemeManager
+from modals import BatchActionModal
+from textual.binding import Binding
+from morefunction import ExportModal
+from textual.screen import ModalScreen
+from morefunction import SettingsScreen
+from morefunction import ThemeMenuScreen
+from textual.app import App, ComposeResult
+from textual.widgets.option_list import Option
+from textual.containers import Horizontal, Vertical
+from morefunction import EscMenuScreen, PackageTable
+from textual.widgets import Header, Footer, Input, Markdown, Label, DataTable, OptionList, Button , RichLog, TextArea, Checkbox, Select, DataTable
 
 # ================= 1. Gemini AI 模組 =================
 class GeminiExplainer:
@@ -98,53 +99,7 @@ class GeminiExplainer:
         except Exception as e:
             return f"❌ AI 查詢失敗: {str(e)}"
 
-# ================= 2. ESC 按鍵彈出的控制選單 =================
-class EscMenuScreen(ModalScreen):
-    """按 ESC 鍵彈出的系統選單"""
-    
-    CSS = """
-    EscMenuScreen {
-        align: center middle;
-        background: rgba(0, 0, 0, 0.7);
-    }
-    #esc-container {
-        width: 45;
-        height: auto;
-        background: #1f2335;
-        border: thick #ff5555;
-        padding: 1;
-    }
-    #esc-title {
-        text-align: center;
-        text-style: bold;
-        color: #ff9e64;
-        margin-bottom: 1;
-    }
-    """
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="esc-container"):
-            yield Label("系統控制選單(歐批踢唉歐嗯)", id="esc-title")
-            yield OptionList(
-
-                Option("⚙️ 系統設定", id="open_settings"), 
-                Option("📤 匯出套件", id="export_list"),
-                Option("📥 匯入套件", id="import_list"),
-                Option("🔄 更新", id="update_system"),
-                Option("🚪 退出程式", id="quit")
-            
-            )
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.dismiss(event.option.id)
-
-class PackageTable(DataTable):
-    """專屬綁定 Enter 鍵的表格，徹底解決與其他輸入框的按鍵衝突"""
-    BINDINGS = [
-        # ✨ 將無敵星星縮小範圍，只綁定在這個表格上！
-        Binding("enter", "app.enter_action", "確認刪除", priority=True)
-    ]
-    pass
 # ================= 3. 主介面模組 =================
 class LinuxPackageManagerApp(App):
     BINDINGS = [
