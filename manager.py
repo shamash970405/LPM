@@ -459,44 +459,19 @@ class LinuxPackageManagerApp(App):
     # 🎯 點擊表頭排序的核心觸發區 (Textual 原生極速渲染版)
     def on_data_table_header_selected(self, event: __import__("textual").widgets.DataTable.HeaderSelected) -> None:
         try:
-            table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
-        except Exception:
-            return
-
-        # 1. 切換正反向 (預設為 False)
-        self.sort_descending = not getattr(self, "sort_descending", False)
-        
-        # 2. 專屬容量轉換器 (把字串換算成純數字)
-        def parse_size(size_str):
-            import re
-            # 清除可能殘留的顏色標籤，並轉大寫
-            clean_str = re.sub(r'\[.*?\]', '', str(size_str)).upper().strip()
-            try:
-                if "GB" in clean_str: return float(clean_str.replace("GB", "").strip()) * 1024 * 1024 * 1024
-                if "MB" in clean_str: return float(clean_str.replace("MB", "").strip()) * 1024 * 1024
-                if "KB" in clean_str: return float(clean_str.replace("KB", "").strip()) * 1024
-                if "B" in clean_str: return float(clean_str.replace("B", "").strip())
-                return 0.0 # 遇到沙盒管理等文字直接墊底
-            except:
-                return 0.0
-
-        # 3. 呼叫 Textual 底層原生排序 (完全不經過 refresh_table_view，零延遲！)
-        try:
-            if event.column_index == 4:
-                # 佔用容量：套用專屬的數字轉換器
-                table.sort(event.column_key, reverse=self.sort_descending, key=parse_size)
-            else:
-                # 其他純文字欄位：清除標籤後直接按字母排序
-                def clean_text(text):
-                    import re
-                    return re.sub(r'\[.*?\]', '', str(text)).lower().strip()
-                table.sort(event.column_key, reverse=self.sort_descending, key=clean_text)
-                
-            # 給一個非常低調且 1 秒就會消失的提示，證明它有在做事
-            self.notify("✨ 列表已重新排序", timeout=1)
+            # 1. 切換正反向
+            self.sort_descending = not getattr(self, "sort_descending", False)
             
+            # 2. 判斷點擊了哪一欄位，更新排序目標
+            targets = {0: "manager", 1: "name", 2: "group", 3: "version", 4: "size"}
+            self.current_sort = targets.get(event.column_index, "name")
+            
+            # 3. 呼叫我們剛剛寫好的完美排序引擎，重新繪製！
+            current_keyword = self.query_one("#pkg-input").value if hasattr(self, 'query_one') else ""
+            self.refresh_table_view(search_text=current_keyword)
+            
+            self.notify(f"✨ 列表已重新排序 (以 {self.current_sort} 為基準)", timeout=1)
         except Exception as e:
-            # 如果真的有錯，強制把錯誤印在畫面上讓我們抓兇手
             self.notify(f"❌ 排序失敗: {str(e)}", severity="error", timeout=5)
 
     async def load_installed_packages(self) -> None:
@@ -627,15 +602,68 @@ class LinuxPackageManagerApp(App):
         table.add_column("[bold #7aa2f7]目前版本[/]", width=22)
         table.add_column("[bold #7aa2f7]佔用容量[/]", width=12)
 
-        # 3. 準備搜尋字串 (轉小寫方便比對)
+        # 3. 準備搜尋字串
         search_lower = search_text.lower()
         packages_source = self.raw_packages if hasattr(self, "raw_packages") and self.raw_packages else []
-        packages_source = self.raw_packages if hasattr(self, "raw_packages") and self.raw_packages else []
+        
         filtered = []
         for pkg in packages_source:
             if search_lower and search_lower not in str(pkg.get("name", "")).lower():
                 continue
             filtered.append(pkg)
+    
+        # ✨ 4. 終極保證置頂排序法 (分離 -> 排序 -> 合併)
+        priority_mgr = getattr(self, "current_priority_manager", "apt")
+        target = getattr(self, "current_sort", sort_by)
+        is_desc = getattr(self, "sort_descending", False)
+
+        def get_val(x):
+            # ⚖️ 容量轉換數字邏輯
+            if target == "size":
+                size_str = str(x.get("size", "0")).upper()
+                try:
+                    if "GB" in size_str: return float(size_str.replace("GB", "").strip()) * 1024 * 1024 * 1024
+                    elif "MB" in size_str: return float(size_str.replace("MB", "").strip()) * 1024 * 1024
+                    elif "KB" in size_str: return float(size_str.replace("KB", "").strip()) * 1024
+                    elif "B" in size_str: return float(size_str.replace("B", "").strip())
+                    else: return 0.0
+                except Exception: return 0.0
+            # 🔤 其他文字邏輯
+            elif target == "group": return str(x.get("group", "System")).lower()
+            elif target == "manager": return str(x.get("manager", "")).lower()
+            else: return str(x.get("name", "")).lower()
+
+        # ✂️ 拆出優先名單與一般名單
+        priority_pkgs = [p for p in filtered if p.get("manager") == priority_mgr]
+        other_pkgs = [p for p in filtered if p.get("manager") != priority_mgr]
+
+        # ⚖️ 兩邊各自乖乖依照容量或名稱排序
+        priority_pkgs.sort(key=get_val, reverse=is_desc)
+        other_pkgs.sort(key=get_val, reverse=is_desc)
+
+        # 🔗 完美合併：優先名單永遠強制壓在最上面！
+        final_list = priority_pkgs + other_pkgs
+
+        # 5. 畫出符合條件的套件
+        for pkg in final_list:
+            pkg_manager = pkg.get("manager", "unknown")
+            pkg_name = pkg.get("name", "unknown")
+            pkg_version = pkg.get("version", "unknown")
+            pkg_size = pkg.get("size", "N/A")
+            
+            # 🧠 應用群組智能分類
+            app_group = pkg.get("group", "System")
+            if "gnome" in pkg_name.lower() or "gtk" in pkg_name.lower(): app_group = "GNOME"
+            elif "kde" in pkg_name.lower() or "qt" in pkg_name.lower(): app_group = "KDE"
+            elif pkg_name in ["python3", "gcc", "git", "make"]: app_group = "Development"
+
+            table.add_row(
+                f"[bold #e0af68]{pkg_manager}[/]",
+                pkg_name,
+                f"[bold #9ece6a]{app_group}[/]",
+                pkg_version,
+                f"[bold #e0af68]{pkg_size}[/]"
+            )
     
         def sort_key(x):
             # 1. 管理員優先權
