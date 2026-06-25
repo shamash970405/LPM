@@ -47,8 +47,11 @@ class SysInfo:
                 "system_upgrade": "paru -Syu --noconfirm && paru -c --noconfirm"
             },
             "snap": {
-                "install": "sudo snap install {pkgs}",
-                "uninstall": "sudo snap remove {pkgs}",
+                "install": "sudo snap install {pkgs} || (echo '\n⚠️ LPM 偵測到套件需要 Classic 沙盒權限，正在自動為您重試...' && sudo snap install {pkgs} --classic)",
+                
+                # ✨ 升級解除安裝：如果一般移除失敗，就用 --purge 強制暴力清道夫！
+                "uninstall": "sudo snap remove {pkgs} || (echo '\n⚠️ 偵測到殘留的套件設定檔，正在啟動強制清除...' && sudo snap remove {pkgs} --purge)",
+                
                 "upgrade_single": "sudo snap refresh {pkgs}",
                 "system_upgrade": "sudo snap refresh"
             },
@@ -142,3 +145,22 @@ class SysInfo:
             return template.format(pkgs=pkgs_str)
             
         return "echo '指令建構失敗：缺漏套件名稱'"
+    
+    async def _scan_snap(self, packages):
+        try:
+            process = await asyncio.create_subprocess_exec("snap", "list", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                lines = stdout.decode().strip().split("\n")
+                for line in lines[1:]:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        name = parts[0]
+                        version = parts[1]
+                        
+                        # ✨ 幽靈防護網：如果版本號是 '-' 或是狀態標示 broken，就當作沒看到它！
+                        if version == "-" or "broken" in line.lower():
+                            continue
+                            
+                        packages.append({"manager": "snap", "name": name, "version": version, "size": "沙盒管理"})
+        except Exception: pass

@@ -526,60 +526,9 @@ class BatchActionModal(ModalScreen):
                     self.query_one("#batch-cancel").disabled = False
                     return
 
-                from morefunction import CommandTerminalScreen
-
-                if getattr(self.main_app, "ssh_mode", False):
-                    def after_terminal_closed(_=None):
-                        self.main_app.notify("🔄 批次操作完畢，正在重新掃描系統套件...")
-                        import asyncio
-                        asyncio.create_task(self.main_app.load_installed_packages())
-
-                    self.main_app.push_screen(CommandTerminalScreen(final_cmd), after_terminal_closed)
-                    self.dismiss()
-                    
-                else:
-                    import os, shutil, subprocess
-                    signal_file = "/tmp/lpm_refresh.tmp"
-                    if os.path.exists(signal_file):
-                        try: os.remove(signal_file)
-                        except Exception: pass
-
-                    terminal_cmd = None
-                    for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                        if shutil.which(term) is not None:
-                            terminal_cmd = term
-                            break
-                    
-                    bash_cmd = f"{final_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
-                    
-                    try:
-                        if terminal_cmd == "gnome-terminal":
-                            subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
-                        elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                            subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
-                        else:
-                            subprocess.Popen(["bash", "-c", bash_cmd])
-                    except Exception as e:
-                        self.main_app.notify(f"❌ 啟動批次程序失敗: {str(e)}", severity="error")
-
-                    self.dismiss()
-                    
-                    async def exact_refresh():
-                        for _ in range(600):
-                            if os.path.exists(signal_file):
-                                try: os.remove(signal_file)
-                                except Exception: pass
-                                
-                                try:
-                                    await self.main_app.load_installed_packages()
-                                    self.main_app.notify("📦 偵測到任務完成，套件清單已即時同步！")
-                                except Exception: pass
-                                break
-                            import asyncio
-                            await asyncio.sleep(1)
-                    
-                    import asyncio
-                    asyncio.create_task(exact_refresh())
+                # 🚀 透過主程式的大一統引擎發射！
+                self.main_app.execute_and_refresh(final_cmd, "🔮 批次操作完成，系統套件已同步！")
+                self.dismiss()
 
             preferred = getattr(self.main_app, "preferred_mgr", "apt")
             self.main_app.push_screen(SearchLoadingModal(self.main_app, raw_packages, preferred, is_install), after_search)

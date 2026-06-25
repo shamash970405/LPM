@@ -781,16 +781,8 @@ class LinuxPackageManagerApp(App):
         self.query_one("#bottom-pane").styles.height = f"{self.bottom_pane_height}%"
         self.query_one("#top-box").styles.height = f"{100 - self.bottom_pane_height}%"
 
-    def action_space_action(self) -> None:
-        """Space 的專屬空殼，真實邏輯在 on_key"""
-        pass
-
-    def action_do_nothing(self) -> None:
-        """純顯示用的空殼"""
-        pass
-
     def action_enter_action(self) -> None:
-        """✅ 真實的 Enter 執行邏輯已經搬來專屬 Action 這裡了！"""
+        """✅ 真實的 Enter 執行邏輯：判斷單一/批次，並呼叫大一統引擎執行"""
         # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷，讓輸入框能正常運作
         if self.focused and getattr(self.focused, "id", None) == "pkg-input":
             return
@@ -818,19 +810,7 @@ class LinuxPackageManagerApp(App):
             
             cmd_list = []
             for mgr, pkgs in grouped_tasks.items():
-                pkgs_str = " ".join(pkgs)
-                if mgr == "pacman": cmd_list.append(f"sudo pacman -Rns {pkgs_str}")
-                elif mgr == "yay": cmd_list.append(f"yay -Rns {pkgs_str}")
-                elif mgr == "paru": cmd_list.append(f"paru -Rns {pkgs_str}")
-                elif mgr == "apt": cmd_list.append(f"sudo apt purge -y {pkgs_str}")
-                elif mgr == "dnf": cmd_list.append(f"sudo dnf remove -y {pkgs_str}")
-                elif mgr == "zypper": cmd_list.append(f"sudo zypper remove -y {pkgs_str}")
-                elif mgr == "apk": cmd_list.append(f"sudo apk del {pkgs_str}")
-                elif mgr == "emerge": cmd_list.append(f"sudo emerge --deselect {pkgs_str}")
-                elif mgr == "xbps": cmd_list.append(f"sudo xbps-remove -R {pkgs_str}")
-                elif mgr == "snap": cmd_list.append(f"sudo snap remove {pkgs_str}")
-                elif mgr == "flatpak": cmd_list.append(f"flatpak uninstall -y {pkgs_str}")
-                elif mgr == "brew": cmd_list.append(f"brew uninstall {pkgs_str}")
+                cmd_list.append(self.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=pkgs))
             
             uninstall_cmd = " && ".join(cmd_list)
             self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
@@ -865,46 +845,19 @@ class LinuxPackageManagerApp(App):
         else:
             return
 
-        # 🚀 執行卸載程序
-        import shutil, subprocess, asyncio
-        from morefunction import CommandTerminalScreen
+        # 🚀 透過大一統引擎執行卸載程序 (一行搞定！)
+        self.execute_and_refresh(uninstall_cmd, "🗑️ 卸載程序完成，套件清單已同步！")
 
-        if getattr(self, "ssh_mode", False):
-            def after_terminal_closed(_=None):
-                self.notify("🔄 偵測到操作完畢，正在重新掃描系統套件...")
-                import asyncio
-                asyncio.create_task(self.load_installed_packages())
+    def action_space_action(self) -> None:
+        """Space 的專屬空殼，真實邏輯在 on_key"""
+        pass
 
-            self.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
-            proc = None 
-        else:
-            terminal_cmd = None
-            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                if shutil.which(term) is not None:
-                    terminal_cmd = term
-                    break
-            
-            proc = None 
-            try:
-                if terminal_cmd == "gnome-terminal":
-                    proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
-                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
-                else:
-                    proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
-            except Exception as e:
-                self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
+    def action_do_nothing(self) -> None:
+        """純顯示用的空殼"""
+        pass
 
-        if proc is not None:
-            async def exact_refresh():
-                await asyncio.to_thread(proc.wait)
-                try:
-                    await self.load_installed_packages()
-                    self.notify("📦 偵測到刪除程序完成，套件清單已即時同步！")
-                except Exception: 
-                    pass
-            
-            asyncio.create_task(exact_refresh())
+    # 🚀 執行卸載程序 (一行搞定！)
+        self.execute_and_refresh(uninstall_cmd, "🗑️ 卸載程序完成，套件清單已同步！")
 
     def action_z_action(self) -> None:
         """Z 鍵的專屬空殼，真實邏輯在 on_key"""
@@ -973,61 +926,9 @@ class LinuxPackageManagerApp(App):
             elif action == "update_system":
                 from morefunction import UpdateChoiceModal, PackageUpdateModal
 
-                # ✨ 建立一個共用的執行引擎：負責判斷 SSH 模式，並處理背景刷新
+                # ✨ 透過共用引擎發射 (一行搞定！)
                 def execute_update_cmd(final_cmd: str):
-                    if not final_cmd or final_cmd == "echo '無更新指令'" or final_cmd == "echo '找不到支援的更新指令'":
-                        self.notify("⚠️ 沒有產生有效的更新指令！", severity="warning")
-                        return
-
-                    if getattr(self, "ssh_mode", False):
-                        # 💻 SSH 模式：使用內建終端機
-                        from morefunction import CommandTerminalScreen
-                        def after_term(_=None):
-                            self.notify("🔄 更新完畢，正在重新掃描系統套件...")
-                            import asyncio
-                            asyncio.create_task(self.load_installed_packages())
-                        self.push_screen(CommandTerminalScreen(final_cmd), after_term)
-                    else:
-                        # 🖥️ 桌面模式：呼叫外部系統終端機
-                        import shutil, subprocess, os
-                        signal_file = "/tmp/lpm_refresh.tmp"
-                        if os.path.exists(signal_file):
-                            try: os.remove(signal_file)
-                            except Exception: pass
-
-                        terminal_cmd = None
-                        for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                            if shutil.which(term) is not None:
-                                terminal_cmd = term; break
-                        
-                        bash_cmd = f"{final_cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
-                        
-                        try:
-                            if terminal_cmd == "gnome-terminal":
-                                subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
-                            elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                                subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
-                            else:
-                                subprocess.Popen(["bash", "-c", bash_cmd])
-                        except Exception as e:
-                            self.notify(f"❌ 啟動外部終端機失敗: {str(e)}", severity="error")
-                            return
-                        
-                        # 背景監聽外部終端機是否關閉
-                        async def exact_refresh():
-                            for _ in range(600):
-                                if os.path.exists(signal_file):
-                                    try: os.remove(signal_file)
-                                    except Exception: pass
-                                    try:
-                                        await self.load_installed_packages()
-                                        self.notify("📦 更新任務完成，套件清單已即時同步！")
-                                    except Exception: pass
-                                    break
-                                import asyncio
-                                await asyncio.sleep(1)
-                        import asyncio
-                        asyncio.create_task(exact_refresh())
+                    self.execute_and_refresh(final_cmd, "🔄 系統升級任務完成，清單已同步！")
 
                 # ========================================================
 
@@ -1262,35 +1163,109 @@ class LinuxPackageManagerApp(App):
         # 🧠 判斷主系統的套件管理員
         if self.sys_status.get("apt"):
             cmd = f"sudo apt update && sudo apt install -y {pkg_name}"
-        elif self.sys_status.get("pacman") or self.sys_status.get("yay"):
+        elif self.sys_status.get("pacman") or self.sys_status.get("yay") or self.sys_status.get("paru"):
             cmd = f"sudo pacman -S --noconfirm {pkg_name}"
         elif self.sys_status.get("dnf"):
             cmd = f"sudo dnf install -y {pkg_name}"
+        elif self.sys_status.get("zypper"):
+            cmd = f"sudo zypper install -y {pkg_name}"
         else:
             self.notify(f"❌ 無法判斷您的底層系統，請手動安裝 {pkg_name}！", severity="error")
             return
 
         self.notify(f"🚀 正在為您準備 {target_mgr.upper()} 的安裝環境...")
 
-        # 🖥️ 呼叫外部終端機執行安裝 (與你的更新系統邏輯共用)
-        import shutil, subprocess
-        terminal_cmd = None
-        for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-            if shutil.which(term) is not None:
-                terminal_cmd = term
-                break
-        
-        bash_cmd = f"{cmd}; read -p '安裝完畢！請按 [Enter] 關閉視窗，並重新啟動 LPM 即可生效...'"
-        
-        try:
-            if terminal_cmd == "gnome-terminal":
-                subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
-            elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
-            else:
-                subprocess.Popen(["bash", "-c", bash_cmd])
-        except Exception as e:
-            self.notify(f"❌ 啟動安裝程序失敗: {str(e)}", severity="error")
+        # ✨ 關鍵修復：加入 SSH 模式判斷分流！
+        if getattr(self, "ssh_mode", False):
+            # 💻 SSH 模式：呼叫 TUI 內建終端機
+            from morefunction import CommandTerminalScreen
+            
+            def after_install(_=None):
+                self.notify("✅ 安裝程序結束！建議您關閉並重新啟動 LPM，以重新偵測系統環境。")
+                
+            self.push_screen(CommandTerminalScreen(cmd), after_install)
+            
+        else:
+            # 🖥️ 桌面 GUI 模式：呼叫外部系統終端機
+            import shutil, subprocess
+            terminal_cmd = None
+            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                if shutil.which(term) is not None:
+                    terminal_cmd = term
+                    break
+            
+            bash_cmd = f"{cmd}; read -p '安裝完畢！請按 [Enter] 關閉視窗，並重新啟動 LPM 即可生效...'"
+            
+            try:
+                if terminal_cmd == "gnome-terminal":
+                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
+                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
+                else:
+                    subprocess.Popen(["bash", "-c", bash_cmd])
+            except Exception as e:
+                self.notify(f"❌ 啟動安裝程序失敗: {str(e)}", severity="error")
+
+    def execute_and_refresh(self, cmd: str, success_msg: str = "📦 系統套件清單已即時同步！") -> None:
+        """🚀 終極大一統引擎：負責執行指令、判斷 SSH 模式，並在結束後精準自動刷新套件清單"""
+        if not cmd or cmd.startswith("echo '"):
+            self.notify("⚠️ 沒有產生有效的執行指令！", severity="warning")
+            return
+
+        import asyncio
+        if getattr(self, "ssh_mode", False):
+            # 💻 SSH 模式：呼叫 TUI 內建終端機
+            from morefunction import CommandTerminalScreen
+            def after_term(_=None):
+                self.notify("🔄 操作完畢，正在重新掃描系統套件...")
+                asyncio.create_task(self.load_installed_packages())
+                
+            self.push_screen(CommandTerminalScreen(cmd), after_term)
+            
+        else:
+            # 🖥️ 桌面模式：呼叫外部系統終端機 + 訊號檔精準監聽
+            import shutil, subprocess, os
+            signal_file = "/tmp/lpm_refresh.tmp"
+            if os.path.exists(signal_file):
+                try: os.remove(signal_file)
+                except Exception: pass
+
+            terminal_cmd = None
+            for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                if shutil.which(term) is not None:
+                    terminal_cmd = term
+                    break
+            
+            # 加上 touch 訊號檔的指令
+            bash_cmd = f"{cmd}; touch {signal_file}; read -p '執行完畢，按 [Enter] 關閉視窗...'"
+            
+            try:
+                if terminal_cmd == "gnome-terminal":
+                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", bash_cmd])
+                elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                    subprocess.Popen([terminal_cmd, "-e", f"bash -c \"{bash_cmd}\""])
+                else:
+                    subprocess.Popen(["bash", "-c", bash_cmd])
+            except Exception as e:
+                self.notify(f"❌ 啟動外部終端機失敗: {str(e)}", severity="error")
+                return
+            
+            # 🚀 啟動背景監聽任務，一旦偵測到訊號檔產生，就立刻刷新！
+            async def exact_refresh():
+                for _ in range(600): # 最多等 10 分鐘
+                    if os.path.exists(signal_file):
+                        try: os.remove(signal_file)
+                        except Exception: pass
+                        
+                        try:
+                            await self.load_installed_packages()
+                            self.notify(success_msg)
+                        except Exception: pass
+                        break
+                    await asyncio.sleep(1)
+                    
+            asyncio.create_task(exact_refresh())
+
 
 if __name__ == "__main__":
     app = LinuxPackageManagerApp()
