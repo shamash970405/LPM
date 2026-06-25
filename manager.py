@@ -832,17 +832,13 @@ class LinuxPackageManagerApp(App):
         
         # 🚨 分流 A：如果選取清單裡有東西，啟動「批次大規模刪除指令建構引擎」！
         if self.selected_packages:
-            grouped_tasks = {}
-            for pkg_info in self.selected_packages.values():
-                grouped_tasks.setdefault(pkg_info["manager"], []).append(pkg_info["name"])
+            # 直接把選取的套件名稱抽成一個純文字陣列：['cmatrix', 'dogsay']
+            pkg_names = [pkg_info["name"] for pkg_info in self.selected_packages.values()]
             
-            cmd_list = []
-            for mgr, pkgs in grouped_tasks.items():
-                cmd_list.append(self.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=pkgs))
+            # ✨ 呼叫共用大腦產生指令！
+            uninstall_cmd = self.generate_uninstall_cmd_from_names(pkg_names)
             
-            uninstall_cmd = " && ".join(cmd_list)
-            self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
-            
+            self.notify(f"🚀 批次觸發: 準備解除安裝 {len(pkg_names)} 個套件...")
             self.selected_packages.clear()
             self.clear_notifications()
             
@@ -1294,6 +1290,33 @@ class LinuxPackageManagerApp(App):
                     
             asyncio.create_task(exact_refresh())
 
+    def generate_uninstall_cmd_from_names(self, target_pkg_names: list) -> str:
+        """🧠 大一統卸載大腦：接收套件名稱清單，自動比對來源並產出完美的跨通路卸載指令"""
+        installed_db = getattr(self, "raw_packages", [])
+        grouped_tasks = {}
+        
+        for target_pkg in target_pkg_names:
+            found_mgr = None
+            
+            # 去資料庫比對這是哪個管理員裝的
+            for installed_pkg in installed_db:
+                if installed_pkg.get("name") == target_pkg:
+                    found_mgr = installed_pkg.get("manager")
+                    break
+                    
+            if not found_mgr:
+                # 🛡️ 沒找到就 fallback 給預設套件管理員
+                fallback_mgr = getattr(self, "preferred_mgr", "apt")
+                found_mgr = fallback_mgr if self.sys_status.get(fallback_mgr) else "apt"
+                
+            grouped_tasks.setdefault(found_mgr, []).append(target_pkg)
+            
+        # 呼叫 sys_info 大腦，根據不同群組分別產生完美的卸載指令
+        cmd_list = []
+        for mgr, pkgs in grouped_tasks.items():
+            cmd_list.append(self.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=pkgs))
+            
+        return " && ".join(cmd_list)
 
 if __name__ == "__main__":
     app = LinuxPackageManagerApp()
