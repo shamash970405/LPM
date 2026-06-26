@@ -476,115 +476,27 @@ class LinuxPackageManagerApp(App):
 
     async def load_installed_packages(self) -> None:
         try:
-            table = self.query_one("#installed-packages-table", DataTable)
+            table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
             table.clear()
         except Exception: pass
         
-        self.raw_packages = []
-        tasks = []
-        if self.sys_status.get("pacman"): tasks.append(self._scan_pacman())
-        if self.sys_status.get("apt"): tasks.append(self._scan_apt())
-        if self.sys_status.get("snap"): tasks.append(self._scan_snap())
-        # ✨ 新增這行：如果系統有 Flatpak，就把它加入平行掃描任務中！
-        if self.sys_status.get("flatpak"): tasks.append(self._scan_flatpak())
+        # ✨ 關鍵：一行指令向大腦索取清單！
+        self.raw_packages = await self.sys_info.scan_all_packages()
 
-        if tasks:
-            await asyncio.gather(*tasks)
-
-        # 🎯 這裡才是更新標籤文字的正確位置！
+        # 🎯 更新左側的標籤文字與數量
         for mgr, avail in self.sys_status.items():
             if avail:
-                # 算出這個套件管理員的總套件數
                 mgr_count = sum(1 for p in self.raw_packages if p.get("manager") == mgr)
                 try:
                     lbl = self.query_one(f"#lbl-{mgr}")
                     lbl.update(f"   - {mgr} [bold #e0af68]({mgr_count})[/]")
-                except Exception as e:
-                    self.notify(f"⚠️ {mgr} 標籤更新失敗: {str(e)}", severity="warning")
+                except Exception: pass
 
         try:
             current_keyword = self.query_one("#pkg-input").value
             self.refresh_table_view(search_text=current_keyword, sort_by=getattr(self, "current_sort", "name"))
         except Exception:
-            # 防呆機制：如果找不到搜尋框，就正常刷新
             self.refresh_table_view()
-
-    async def _scan_pacman(self):
-        try:
-            process = await asyncio.create_subprocess_exec("pacman", "-Qi", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
-                package_blocks = stdout.decode().strip().split("\n\n")
-                for block in package_blocks:
-                    name, version, size = None, None, "未知"
-                    for line in block.split("\n"):
-                        if "名稱" in line or "Name" in line: name = line.split(":", 1)[1].strip() if ":" in line else name
-                        elif "版本" in line or "Version" in line: version = line.split(":", 1)[1].strip() if ":" in line else version
-                        elif "大小" in line or "Size" in line: size = line.split(":", 1)[1].strip() if ":" in line else size
-                    if name and version:
-                        display_size = size.replace("KiB", "KB").replace("MiB", "MB").replace("GiB", "GB").replace("TiB", "TB")
-                        self.raw_packages.append({"manager": "pacman", "name": name, "version": version, "size": display_size})
-        except Exception: pass
-
-    async def _scan_apt(self):
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "dpkg-query", "-W", "-f=${Status}\t${Package}\t${Version}\t${Installed-Size}\n",
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
-                for line in stdout.decode().strip().split("\n"):
-                    parts = line.split("\t")
-                    if len(parts) >= 4 and "install ok installed" in parts[0]:
-                        name, version, raw_size = parts[1], parts[2], parts[3].strip()
-                        if raw_size and raw_size.isdigit():
-                            size_kb = float(raw_size)
-                            display_size = f"{size_kb / 1024:.2f} MB" if size_kb > 1024 else f"{size_kb:.2f} KB"
-                        else: display_size = "未知"
-                        self.raw_packages.append({"manager": "apt", "name": name, "version": version, "size": display_size})
-        except Exception: pass
-
-    async def _scan_snap(self):
-        try:
-            process = await asyncio.create_subprocess_exec("snap", "list", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
-                lines = stdout.decode().strip().split("\n")
-                for line in lines[1:]:
-                    parts = line.split()
-                    if len(parts) >= 3:
-                        name = parts[0]
-                        version = parts[1]
-                        self.raw_packages.append({"manager": "snap", "name": name, "version": version, "size": "沙盒管理"})
-        except Exception: pass
-
-    async def _scan_flatpak(self):
-        try:
-            # 🚀 呼叫 flatpak list，並指定只輸出 Application ID 和 Version (以 tab 分隔)
-            process = await asyncio.create_subprocess_exec(
-                "flatpak", "list", "--columns=application,version", 
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
-                lines = stdout.decode().strip().split("\n")
-                for line in lines:
-                    if not line.strip(): 
-                        continue
-                    parts = line.split("\t")
-                    if len(parts) >= 1:
-                        name = parts[0].strip()
-                        version = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "未知"
-                        # Flatpak 同樣是沙盒機制，容量計算較複雜，我們統一標示為沙盒管理
-                        self.raw_packages.append({
-                            "manager": "flatpak", 
-                            "name": name, 
-                            "version": version, 
-                            "size": "沙盒管理"
-                        })
-        except Exception: 
-            pass
 
     def refresh_table_view(self, search_text: str = "", sort_by: str = "size") -> None:
         try:
@@ -879,9 +791,6 @@ class LinuxPackageManagerApp(App):
     def action_do_nothing(self) -> None:
         """純顯示用的空殼"""
         pass
-
-    # 🚀 執行卸載程序 (一行搞定！)
-        self.execute_and_refresh(uninstall_cmd, "🗑️ 卸載程序完成，套件清單已同步！")
 
     def action_z_action(self) -> None:
         """Z 鍵的專屬空殼，真實邏輯在 on_key"""

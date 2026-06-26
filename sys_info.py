@@ -1,4 +1,6 @@
 import shutil
+import asyncio
+import subprocess
 
 class SysInfo:
     """專門負責底層作業系統偵測、硬體環境、以及各發行版核心指令範本的獨立大腦"""
@@ -146,6 +148,58 @@ class SysInfo:
             
         return "echo '指令建構失敗：缺漏套件名稱'"
     
+    # ================= 📦 底層套件掃描引擎 =================
+    async def scan_all_packages(self) -> list:
+        """🚀 平行發動所有可用的套件管理員進行掃描，並統整成乾淨的清單回傳"""
+        packages = []
+        tasks = []
+        
+        if self.status.get("pacman"): tasks.append(self._scan_pacman(packages))
+        if self.status.get("apt"): tasks.append(self._scan_apt(packages))
+        if self.status.get("snap"): tasks.append(self._scan_snap(packages))
+        if self.status.get("flatpak"): tasks.append(self._scan_flatpak(packages))
+
+        if tasks:
+            await asyncio.gather(*tasks)
+            
+        return packages
+
+    async def _scan_pacman(self, packages):
+        try:
+            process = await asyncio.create_subprocess_exec("pacman", "-Qi", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                package_blocks = stdout.decode().strip().split("\n\n")
+                for block in package_blocks:
+                    name, version, size = None, None, "未知"
+                    for line in block.split("\n"):
+                        if "名稱" in line or "Name" in line: name = line.split(":", 1)[1].strip() if ":" in line else name
+                        elif "版本" in line or "Version" in line: version = line.split(":", 1)[1].strip() if ":" in line else version
+                        elif "大小" in line or "Size" in line: size = line.split(":", 1)[1].strip() if ":" in line else size
+                    if name and version:
+                        display_size = size.replace("KiB", "KB").replace("MiB", "MB").replace("GiB", "GB").replace("TiB", "TB")
+                        packages.append({"manager": "pacman", "name": name, "version": version, "size": display_size})
+        except Exception: pass
+
+    async def _scan_apt(self, packages):
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "dpkg-query", "-W", "-f=${Status}\t${Package}\t${Version}\t${Installed-Size}\n",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                for line in stdout.decode().strip().split("\n"):
+                    parts = line.split("\t")
+                    if len(parts) >= 4 and "install ok installed" in parts[0]:
+                        name, version, raw_size = parts[1], parts[2], parts[3].strip()
+                        if raw_size and raw_size.isdigit():
+                            size_kb = float(raw_size)
+                            display_size = f"{size_kb / 1024:.2f} MB" if size_kb > 1024 else f"{size_kb:.2f} KB"
+                        else: display_size = "未知"
+                        packages.append({"manager": "apt", "name": name, "version": version, "size": display_size})
+        except Exception: pass
+
     async def _scan_snap(self, packages):
         try:
             process = await asyncio.create_subprocess_exec("snap", "list", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -157,10 +211,26 @@ class SysInfo:
                     if len(parts) >= 3:
                         name = parts[0]
                         version = parts[1]
-                        
-                        # ✨ 幽靈防護網：如果版本號是 '-' 或是狀態標示 broken，就當作沒看到它！
+                        # ✨ 你的幽靈防護網在這裡！
                         if version == "-" or "broken" in line.lower():
                             continue
-                            
                         packages.append({"manager": "snap", "name": name, "version": version, "size": "沙盒管理"})
+        except Exception: pass
+
+    async def _scan_flatpak(self, packages):
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "flatpak", "list", "--columns=application,version", 
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                lines = stdout.decode().strip().split("\n")
+                for line in lines:
+                    if not line.strip(): continue
+                    parts = line.split("\t")
+                    if len(parts) >= 1:
+                        name = parts[0].strip()
+                        version = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "未知"
+                        packages.append({"manager": "flatpak", "name": name, "version": version, "size": "沙盒管理"})
         except Exception: pass
