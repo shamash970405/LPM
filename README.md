@@ -86,13 +86,6 @@ git clone https://github.com/shamash970405/LPM.git
 cd ~/LPM
 
 # 3. 建立並啟用 Python 虛擬環境
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 4. 一鍵安裝官方標準相容依賴套件（包含 Textual 與 Google GenAI）
-pip install -r requirements.txt 
-
-# 5. 執行該專案
-python3 manager.py
+./install.sh
 ```
 我知道有點麻煩ww再忍耐一下就好,之後會變成apt
