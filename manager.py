@@ -586,66 +586,7 @@ class LinuxPackageManagerApp(App):
                 pkg_version,
                 f"[bold #e0af68]{pkg_size}[/]"
             )
-    
-        def sort_key(x):
-            # 1. 管理員優先權
-            priority_mgr = getattr(self, "current_priority_manager", None)
-            is_priority = 1 if x.get("manager") == priority_mgr else 0
-            
-            # 2. 確定目前的排序目標
-            target = getattr(self, "current_sort", sort_by)
-            
-            # ⚖️ 容量排序邏輯
-            if target == "size":
-                size_str = str(x.get("size", "0")).upper()
-                try:
-                    # 內建無敵轉型，把 MB, GB 換算成最基礎的 Bytes 數字來比大小！
-                    if "GB" in size_str: val = float(size_str.replace("GB", "").strip()) * 1024 * 1024 * 1024
-                    elif "MB" in size_str: val = float(size_str.replace("MB", "").strip()) * 1024 * 1024
-                    elif "KB" in size_str: val = float(size_str.replace("KB", "").strip()) * 1024
-                    elif "B" in size_str: val = float(size_str.replace("B", "").strip())
-                    else: val = 0.0 # 遇到 "沙盒管理" 這類純文字，乖乖變成 0 墊底
-                except Exception:
-                    val = 0.0
-                return (is_priority, val)
-                
-            # 📁 群組排序邏輯
-            elif target == "group":
-                return (is_priority, str(x.get("group", "System")).lower())
-                
-            # 📦 來源排序邏輯
-            elif target == "manager":
-                return (is_priority, str(x.get("manager", "")).lower())
-                
-            # 🔤 預設名稱排序邏輯
-            else:
-                return (is_priority, str(x.get("name", "")).lower())
 
-        # 4. 畫出符合條件的套件
-        for pkg in filtered:
-            # 取出變數 (加上預設值防呆)
-            pkg_manager = pkg.get("manager", "unknown")
-            pkg_name = pkg.get("name", "unknown")
-            pkg_version = pkg.get("version", "unknown")
-            pkg_size = pkg.get("size", "N/A")
-            
-            # 🧠 應用群組智能分類 (保留你超棒的分類邏輯)
-            app_group = pkg.get("group", "System")
-            if "gnome" in pkg_name.lower() or "gtk" in pkg_name.lower():
-                app_group = "GNOME"
-            elif "kde" in pkg_name.lower() or "qt" in pkg_name.lower():
-                app_group = "KDE"
-            elif pkg_name in ["python3", "gcc", "git", "make"]:
-                app_group = "Development"
-
-            # 🎨 把資料畫上去，並套用專屬的橘色與綠色標籤！
-            table.add_row(
-                f"[bold #e0af68]{pkg_manager}[/]",   # 🟠 來源：橘黃色
-                pkg_name,                            # ⚪ 名稱：預設顏色
-                f"[bold #9ece6a]{app_group}[/]",     # 🟢 群組：薄荷綠色
-                pkg_version,                         # ⚪ 版本：預設顏色
-                f"[bold #e0af68]{pkg_size}[/]"       # 🟠 容量：橘黃色
-            )
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         try:
@@ -1107,7 +1048,17 @@ class LinuxPackageManagerApp(App):
         if self.sys_status.get("apt"):
             cmd = f"sudo apt update && sudo apt install -y {pkg_name}"
         elif self.sys_status.get("pacman") or self.sys_status.get("yay") or self.sys_status.get("paru"):
-            cmd = f"sudo pacman -S --noconfirm {pkg_name}"
+            if target_mgr == "flatpak":
+                cmd = "sudo pacman -S --noconfirm flatpak"
+            elif target_mgr == "snap":
+                # ⚡ Snapd 在 AUR 裡，必須用 yay/paru 裝，並且要啟動 systemd socket 服務與建立軟連結！
+                post_setup = "sudo systemctl enable --now snapd.socket && sudo ln -sf /var/lib/snapd/snap /snap"
+                if self.sys_status.get("yay"):
+                    cmd = f"yay -S --noconfirm snapd && {post_setup}"
+                elif self.sys_status.get("paru"):
+                    cmd = f"paru -S --noconfirm snapd && {post_setup}"
+                else:
+                    cmd = f"sudo pacman -S --noconfirm snapd && {post_setup}"
         elif self.sys_status.get("dnf"):
             cmd = f"sudo dnf install -y {pkg_name}"
         elif self.sys_status.get("zypper"):

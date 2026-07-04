@@ -234,20 +234,7 @@ class SearchLoadingModal(ModalScreen):
 
         fetched_results = await asyncio.gather(*tasks)
         return {mgr: names for mgr, names in fetched_results if names}
-
-        # 任務派發
-        if sys_status.get("apt"): tasks.append(fetch_candidates("apt", kw))
-        if sys_status.get("snap"): tasks.append(fetch_candidates("snap", kw))
-        if sys_status.get("flatpak"): tasks.append(fetch_candidates("flatpak", kw))
-        
-        # ✨ Arch 專屬防禦
-        if sys_status.get("yay"): tasks.append(fetch_candidates("yay", kw))
-        elif sys_status.get("paru"): tasks.append(fetch_candidates("paru", kw))
-        elif sys_status.get("pacman"): tasks.append(fetch_candidates("pacman", kw))
-
-        fetched_results = await asyncio.gather(*tasks)
-        return {mgr: names for mgr, names in fetched_results if names}
-
+    
     async def run_search_process(self, input_packages):
         self.query_one("#anim-section").styles.display = "block"
         self.query_one("#tree-section").styles.display = "none"
