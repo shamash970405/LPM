@@ -4,8 +4,8 @@ import subprocess
 import urllib.request
 
 def pre_flight_check():
-    """LPM 啟動前置自檢與自動修復引擎"""
-    print("🔍 [LPM 自檢系統] 正在檢查執行環境...")
+    """🚀 LPM 啟動前置自檢與自動修復引擎 (支援 PEP 668 跨發行版防禦)"""
+    print("🔍 [LPM 自檢系統] 正在檢查執行環境與必備套件...")
     
     # 📦 1. 檢查並自動安裝缺少的 Python 依賴套件
     required_packages = {
@@ -13,17 +13,27 @@ def pre_flight_check():
         "google.genai": "google-genai"
     }
     
+    # 判斷目前是否身處於 Python 虛擬環境 (venv) 中
+    in_venv = sys.prefix != sys.base_prefix
+
     for module_name, pip_name in required_packages.items():
         try:
             __import__(module_name)
         except ImportError:
-            print(f"📦 發現缺少必備套件：{pip_name}，正在自動為您下載安裝...")
+            print(f"📦 發現缺少必備套件：{pip_name}，正在為您自動下載安裝...")
             try:
-                # 呼叫系統底層的 pip 執行安裝
-                subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name, "--quiet"])
-                print(f"✅ {pip_name} 自動安裝完成！")
+                # 建構標準 pip 安裝指令
+                pip_cmd = [sys.executable, "-m", "pip", "install", pip_name, "--quiet"]
+                
+                # ✨ 終極防禦：如果在 Arch / Ubuntu 等實施 PEP 668 的系統且「不在 venv 內」，自動繞過封印！
+                if not in_venv:
+                    pip_cmd.append("--break-system-packages")
+                
+                subprocess.check_call(pip_cmd)
+                print(f"✅ {pip_name} 自動安裝與載入完成！")
             except Exception as e:
-                print(f"❌ 無法自動安裝 {pip_name}，請手動執行：pip install {pip_name}")
+                print(f"❌ 自動安裝 {pip_name} 失敗！原因: {e}")
+                print(f"💡 強烈建議解法：請先執行 `python3 -m venv .venv && source .venv/bin/activate` 後再啟動 LPM。")
                 sys.exit(1)
 
     # 📄 2. 檢查並自動下載缺少的 LPM 核心檔案 (從你的 GitHub 專案自動抓取)
