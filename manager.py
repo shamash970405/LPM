@@ -265,116 +265,119 @@ class LinuxPackageManagerApp(App):
                 return
 
         # 🔑 【Enter 鍵：執行刪除（單一或批次自動分流）】
+        # 🔑 【Enter 鍵：執行刪除（單一或批次自動分流）】
         if event.key == "enter":
-            # ✨ 終極防禦：如果目前正在顯示設定、批次匯入或任何「跳窗 (ModalScreen)」，立刻停止，絕不執行卸載！
-            if isinstance(self.screen, ModalScreen):
-                return
-
             # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷
             if self.focused and getattr(self.focused, "id", None) == "pkg-input":
-                return 
-
-            uninstall_cmd = ""
-            
-            # 🚨 分流 A：如果選取清單裡有東西，啟動「批次大規模刪除指令建構引擎」！
-            if self.selected_packages:
-                # 🧠 智能分組：把相同管理員的套件聚在一起
-                grouped_tasks = {}
-                for pkg_info in self.selected_packages.values():
-                    grouped_tasks.setdefault(pkg_info["manager"], []).append(pkg_info["name"])
-                
-                # 🛠️ 根據不同管理員串聯多個套件 (例如：apt purge -y pkg1 pkg2)
-                # ✅ 升級後無腦優雅的寫法：
-                cmd_list = []
-                for mgr, pkgs in grouped_tasks.items():
-            # 讓 sys_info 自動依據管理員和動作，噴出對應的 Arch 或 Debian 指令！
-                    cmd_list.append(self.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=pkgs))
-
-                uninstall_cmd = " && ".join(cmd_list)
-                self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
-                
-                # 🧹 任務升空後，立刻清空緩存，回復乾淨狀態
-                self.selected_packages.clear()
-                self.clear_notifications()
-                
-            # 🎯 分流 B：清單是空的，退回原本高精準度的「單一套件移除」邏輯
-            elif table.cursor_coordinate:
-                row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-                row_data = table.get_row(row_key)
-                
-                raw_mgr = clean_markup(row_data[0])
-                package_name = clean_markup(row_data[1])
-                
-                self.notify(f"🚀 鍵盤觸發: 準備解除安裝 {raw_mgr.upper()} 套件: {package_name}...")
-                
-                if raw_mgr == "pacman": uninstall_cmd = f"sudo pacman -Rns {package_name}"
-                elif raw_mgr == "yay": uninstall_cmd = f"yay -Rns {package_name}"
-                elif raw_mgr == "paru": uninstall_cmd = f"paru -Rns {package_name}"
-                elif raw_mgr == "apt": uninstall_cmd = f"sudo apt purge -y {package_name}"
-                elif raw_mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {package_name}"
-                elif raw_mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {package_name}"
-                elif raw_mgr == "apk": uninstall_cmd = f"sudo apk del {package_name}"
-                elif raw_mgr == "emerge": uninstall_cmd = f"sudo emerge --deselect {package_name}"
-                elif raw_mgr == "xbps": uninstall_cmd = f"sudo xbps-remove -R {package_name}"
-                elif raw_mgr == "snap": uninstall_cmd = f"sudo snap remove {package_name}"
-                elif raw_mgr == "flatpak": uninstall_cmd = f"flatpak uninstall -y {package_name}"
-                elif raw_mgr == "brew": uninstall_cmd = f"brew uninstall {package_name}"
-                else: return
-            
-            else:
                 return
 
-           # 🚀 執行卸載程序 (支援批次、單一指令與 SSH 內建終端機)
-            import shutil, subprocess, asyncio
-            from morefunction import CommandTerminalScreen # 引入我們剛寫好的內建終端機
-
-            # ✨ 判斷是否開啟了 SSH 模式
-            if getattr(self, "ssh_mode", False):
+            try:
+                table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
+                uninstall_cmd = ""
                 
-                # 🌟 核心升級：定義一個當內部終端機「關閉時」才觸發的專屬動作
-                def after_terminal_closed(_=None):
-                    self.notify("🔄 偵測到操作完畢，正在重新掃描系統套件...")
-                    import asyncio
-                    asyncio.create_task(self.load_installed_packages())
-
-                # 💻 SSH 模式：彈出終端機，並且把這個「關閉後的動作」綁定在它身上！
-                self.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
-                proc = None # 內部終端機由畫面處理，主程式不需要綁定外部 proc
-
-            else:
-                # 🖥️ 維持原本的邏輯：呼叫外部圖形終端機
-                terminal_cmd = None
-                for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                    if shutil.which(term) is not None:
-                        terminal_cmd = term
-                        break
-                
-                proc = None  # 💡 用來綁定行程的變數
-                try:
-                    if terminal_cmd == "gnome-terminal":
-                        proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
-                    elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
-                        proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
-                    else:
-                        proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
-                except Exception as e:
-                    self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
-
-            # 🎯 【主程式專屬：主動防禦型精準監聽管線】
-            if proc is not None:
-                async def exact_refresh():
-                    # ⏳ 在背景線程死守等待終端機行程結束，絕對不卡死 LPM 畫面
-                    await asyncio.to_thread(proc.wait)
+                # 🚨 分流 A：如果選取清單裡有東西，啟動「批次大規模刪除指令建構引擎」！
+                if self.selected_packages:
+                    # 🧠 智能分組：把相同管理員的套件聚在一起
+                    grouped_tasks = {}
+                    for pkg_info in self.selected_packages.values():
+                        grouped_tasks.setdefault(pkg_info["manager"], []).append(pkg_info["name"])
                     
-                    # 當使用者在終端機按下 Enter 讓視窗消失的瞬間，精準觸發刷新！
-                    try:
-                        await self.load_installed_packages()
-                        self.notify("📦 偵測到刪除程序完成，套件清單已即時同步！")
-                    except Exception: 
-                        pass
+                    # 🛠️ 根據不同管理員串聯多個套件 (例如：apt purge -y pkg1 pkg2)
+                    # ✅ 升級後無腦優雅的寫法：
+                    cmd_list = []
+                    for mgr, pkgs in grouped_tasks.items():
+                        # 讓 sys_info 自動依據管理員和動作，噴出對應的 Arch 或 Debian 指令！
+                        cmd_list.append(self.sys_info.build_command(mgr=mgr, action="uninstall", pkgs=pkgs))
+
+                    uninstall_cmd = " && ".join(cmd_list)
+                    self.notify(f"🚀 批次觸發: 準備解除安裝 {len(self.selected_packages)} 個套件...")
+                    
+                    # 🧹 任務升空後，立刻清空緩存，回復乾淨狀態
+                    self.selected_packages.clear()
+                    self.clear_notifications()
+                    
+                # 🎯 分流 B：清單是空的，退回原本高精準度的「單一套件移除」邏輯
+                elif table.cursor_coordinate: # This line was the problem
+                    row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+                    row_data = table.get_row(row_key)
+                    
+                    raw_mgr = clean_markup(row_data[0])
+                    package_name = clean_markup(row_data[1])
+                    
+                    self.notify(f"🚀 鍵盤觸發: 準備解除安裝 {raw_mgr.upper()} 套件: {package_name}...")
+                    
+                    if raw_mgr == "pacman": uninstall_cmd = f"sudo pacman -Rns {package_name}"
+                    elif raw_mgr == "yay": uninstall_cmd = f"yay -Rns {package_name}"
+                    elif raw_mgr == "paru": uninstall_cmd = f"paru -Rns {package_name}"
+                    elif raw_mgr == "apt": uninstall_cmd = f"sudo apt purge -y {package_name}"
+                    elif raw_mgr == "dnf": uninstall_cmd = f"sudo dnf remove -y {package_name}"
+                    elif raw_mgr == "zypper": uninstall_cmd = f"sudo zypper remove -y {package_name}"
+                    elif raw_mgr == "apk": uninstall_cmd = f"sudo apk del {package_name}"
+                    elif raw_mgr == "emerge": uninstall_cmd = f"sudo emerge --deselect {package_name}"
+                    elif raw_mgr == "xbps": uninstall_cmd = f"sudo xbps-remove -R {package_name}"
+                    elif raw_mgr == "snap": uninstall_cmd = f"sudo snap remove {package_name}"
+                    elif raw_mgr == "flatpak": uninstall_cmd = f"flatpak uninstall -y {package_name}"
+                    elif raw_mgr == "brew": uninstall_cmd = f"brew uninstall {package_name}"
+                    else: return
                 
-                # 扣下背景監聽任務的扳機
-                asyncio.create_task(exact_refresh())
+                else:
+                    return
+
+                # 🚀 執行卸載程序 (支援批次、單一指令與 SSH 內建終端機)
+                import shutil, subprocess, asyncio
+                from morefunction import CommandTerminalScreen # 引入我們剛寫好的內建終端機
+
+                # ✨ 判斷是否開啟了 SSH 模式
+                if getattr(self, "ssh_mode", False):
+                    
+                    # 🌟 核心升級：定義一個當內部終端機「關閉時」才觸發的專屬動作
+                    def after_terminal_closed(_=None):
+                        self.notify("🔄 偵測到操作完畢，正在重新掃描系統套件...")
+                        import asyncio
+                        asyncio.create_task(self.load_installed_packages())
+
+                    # 💻 SSH 模式：彈出終端機，並且把這個「關閉後的動作」綁定在它身上！
+                    self.push_screen(CommandTerminalScreen(uninstall_cmd), after_terminal_closed)
+                    proc = None # 內部終端機由畫面處理，主程式不需要綁定外部 proc
+
+                else:
+                    # 🖥️ 維持原本的邏輯：呼叫外部圖形終端機
+                    terminal_cmd = None
+                    for term in ["konsole", "gnome-terminal", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                        if shutil.which(term) is not None:
+                            terminal_cmd = term
+                            break
+                    
+                    proc = None  # 💡 用來綁定行程的變數
+                    try:
+                        if terminal_cmd == "gnome-terminal":
+                            proc = subprocess.Popen(["gnome-terminal", "--wait", "--", "bash", "-c", f"{uninstall_cmd}; read -p '執行完畢，按 [Enter] 關閉視窗...'"])
+                        elif terminal_cmd in ["konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"]:
+                            proc = subprocess.Popen([terminal_cmd, "-e", f"bash -c '{uninstall_cmd}; read -p \"執行完畢，按 [Enter] 關閉視窗...\"'"])
+                        else:
+                            proc = subprocess.Popen(["bash", "-c", uninstall_cmd])
+                    except Exception as e:
+                        self.notify(f"❌ 啟動卸載程序失敗: {str(e)}", severity="error")
+
+                # 🎯 【主程式專屬：主動防禦型精準監聽管線】
+                if proc is not None:
+                    async def exact_refresh():
+                        # ⏳ 在背景線程死守等待終端機行程結束，絕對不卡死 LPM 畫面
+                        await asyncio.to_thread(proc.wait)
+                        
+                        # 當使用者在終端機按下 Enter 讓視窗消失的瞬間，精準觸發刷新！
+                        try:
+                            await self.load_installed_packages()
+                            self.notify("📦 偵測到刪除程序完成，套件清單已即時同步！")
+                        except Exception: 
+                            pass
+                    
+                    # 扣下背景監聽任務的扳機
+                    asyncio.create_task(exact_refresh())
+
+            except Exception as e: # Catch any exception during table query or data retrieval
+                self.notify(f"❌ 處理 Enter 事件失敗: {str(e)}", severity="error")
+                return
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
