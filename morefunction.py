@@ -138,27 +138,21 @@ class SettingsScreen(ModalScreen):
         if event.button.id == "setting-save":
             ai_choice = self.query_one("#setting-ai-model").value
             api_token = self.query_one("#setting-api-token").value
-            ssh_mode = self.query_one("#setting-ssh-mode").value # 抓取開關狀態
+            ssh_mode = self.query_one("#setting-ssh-mode").value
             pref_mgr = self.query_one("#setting-pref-mgr").value
             
-            if not ai_choice or ai_choice == Select.BLANK:
-                self.notify("❌ 請先選擇一個 AI 引擎！", severity="error")
-                return
-            
+            # 移除檢查 ai_choice 是否為空或 Select.BLANK 的邏輯
+            # 並直接 dismiss，即使 ai_choice 是空的
             self.notify(f"✅ 設定已更新！SSH 模式: {'開啟' if ssh_mode else '關閉'}")
-            # 將 ssh_mode 一起打包回傳
             self.dismiss({
-                "ai_engine": ai_choice, 
+                "ai_engine": ai_choice if ai_choice and ai_choice != Select.BLANK else None, # 將空值或 BLANK 轉換為 None
                 "api_token": api_token, 
                 "ssh_mode": ssh_mode, 
                 "preferred_mgr": pref_mgr
             })
-        
+
         if event.button.id == "btn_copy_sys_info":
-            # 防止事件繼續往上傳遞觸發其他東西
             event.stop() 
-            
-            # 從 modals 引入我們剛剛做好的彈出視窗
             from modals import SysInfoPreviewModal 
             self.app.push_screen(SysInfoPreviewModal())
             return
