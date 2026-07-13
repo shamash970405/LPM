@@ -215,6 +215,10 @@ class LinuxPackageManagerApp(App):
 
         # 📌 【Space 鍵：多選 / 取消選取 模式 (TUI 界的多選標準)】
         if event.key == "space":
+            # ✨ 終極防禦：如果目前畫面上正顯示任何「跳窗 (ModalScreen)」，絕對不要攔截，放行給跳窗使用！
+            if isinstance(self.screen, ModalScreen):
+                return
+
             # 🛡️ 焦點檢查：如果游標在搜尋輸入框裡，放行讓使用者打半形空白！
             if self.focused and getattr(self.focused, "id", None) == "pkg-input":
                 return
@@ -262,13 +266,12 @@ class LinuxPackageManagerApp(App):
 
         # 🔑 【Enter 鍵：執行刪除（單一或批次自動分流）】
         if event.key == "enter":
-            # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷
-            if self.focused and getattr(self.focused, "id", None) == "pkg-input":
+            # ✨ 終極防禦：如果目前正在顯示設定、批次匯入或任何「跳窗 (ModalScreen)」，立刻停止，絕不執行卸載！
+            if isinstance(self.screen, ModalScreen):
                 return
 
-            try:
-                table = self.query_one("#installed-packages-table", __import__("textual").widgets.DataTable)
-            except Exception:
+            # 🛡️ 焦點防呆攔截：如果游標停在搜尋框，立刻中斷
+            if self.focused and getattr(self.focused, "id", None) == "pkg-input":
                 return 
 
             uninstall_cmd = ""
