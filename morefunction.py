@@ -654,6 +654,6 @@ class PackageTable(DataTable):
     """專屬綁定 Enter 鍵的表格，徹底解決與其他輸入框的按鍵衝突"""
     BINDINGS = [
         # ✨ 將無敵星星縮小範圍，只綁定在這個表格上！
-        Binding("enter", "app.enter_action", "確認刪除", priority=True)
+        # Binding("enter", "app.enter_action", "確認刪除", priority=True) # REMOVED
     ]
     pass
