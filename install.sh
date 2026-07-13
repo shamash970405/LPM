@@ -19,7 +19,7 @@ echo -e "${LIGHT_BLUE}${BOLD}==================================================$
 # 📍 核心邏輯 1：精準抓取用戶目前 git clone 下來的絕對路徑
 # ==============================================================================
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-echo -e "${GREEN}✔ 成功定位專案實體路徑：${BOLD}${REPO_DIR}${NC}\\n"
+echo -e "${GREEN}✔ 成功定位專案實體路徑：${BOLD}${REPO_DIR}${NC}\n"
 
 # ==============================================================================
 # 🛠️ 核心邏輯 2：偵測並「互動式詢問」是否安裝 Python 必備底層工具
@@ -36,7 +36,7 @@ if ! python3 -m pip --version &> /dev/null || ! python3 -c "import venv" &> /dev
     
     # 判斷用戶是否輸入 y 或 Y
     if [[ "$install_resp" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        echo -e "\\n${LIGHT_BLUE}🚀 正在自動偵測您的 Linux 發行版，並為您安裝相依套件...${NC}"
+        echo -e "\n${LIGHT_BLUE}🚀 正在自動偵測您的 Linux 發行版，並為您安裝相依套件...${NC}"
         
         if command -v apt &> /dev/null; then
             echo -e "📦 偵測為 Debian / Ubuntu 體系，正在透過 apt 安裝..."
@@ -60,15 +60,15 @@ if ! python3 -m pip --version &> /dev/null || ! python3 -c "import venv" &> /dev
             echo -e "${RED}❌ 無法自動判斷發行版！請手動安裝 python3-pip 與 python3-venv 後再試。${NC}"
             exit 1
         fi
-        echo -e "${GREEN}✔ 底層 Python 工具 (pip & venv) 安裝完畢！${NC}\\n"
+        echo -e "${GREEN}✔ 底層 Python 工具 (pip & venv) 安裝完畢！${NC}\n"
     else
         # 🛡️ 用戶拒絕授權時，優雅說明原因並安全中止腳本
-        echo -e "\\n${RED}❌ 您選擇了取消安裝。由於 LPM 核心需要 pip 與 venv 才能建置獨立環境，安裝程序已安全中止。${NC}"
-        echo -e "${LIGHT_BLUE}💡 提示：日後您可依照發行版手動安裝 python3-pip 與 python3-venv 後，再次執行此腳本。${NC}"
+        echo -e "\n${RED}❌ 您選擇了取消安裝。由於 LPM 核心需要 pip 與 venv 才能建置獨立環境，安裝程序已安全中止。${NC}"
+        echo -e "${LIGHT_BLUE}💡 提示：日後您可依照發行版手動安裝 python3-pip 與 python3-venv 後，再次執行此腳本。${NC}\n"
         exit 1
     fi
 else
-    echo -e "${GREEN}✔ 系統已具備完整 pip 與 venv 支援！${NC}\\n"
+    echo -e "${GREEN}✔ 系統已具備完整 pip 與 venv 支援！${NC}\n"
 fi
 
 # ==============================================================================
@@ -76,24 +76,65 @@ fi
 # ==============================================================================
 cd "$REPO_DIR" || exit 1
 
+VENV_DIR="" # 確保 VENV_DIR 總是被初始化
+
 if [ -d ".venv" ]; then
     echo -e "${GREEN}✔ 偵測到現有虛擬環境 (.venv)，正在自動啟用...${NC}\\n"
+    VENV_DIR=".venv"
     source .venv/bin/activate
 elif [ -d "venv" ]; then
     echo -e "${GREEN}✔ 偵測到現有虛擬環境 (venv)，正在自動啟用...${NC}\\n"
+    VENV_DIR="venv"
     source venv/bin/activate
 else
     echo -e "${YELLOW}💡 正在為您建立獨立的 .venv 虛擬環境並安裝 requirements.txt 套件...${NC}"
+    VENV_DIR=".venv"
     python3 -m venv .venv
     source .venv/bin/activate
     
     # 升級 venv 內的 pip 並安裝相依套件
-    python3 -m pip install --upgrade pip --quiet
+    "$VENV_PYTHON" -m pip install --upgrade pip --quiet
     if [ -f "requirements.txt" ]; then
         echo -e "📦 正在下載並安裝 LPM 核心套件 (Textual, GenAI, Rich...)..."
-        pip install -r requirements.txt
+        "$VENV_PYTHON" -m pip install -r requirements.txt
         echo -e "${GREEN}✔ 虛擬環境與 requirements.txt 套件建置完成！${NC}\\n"
     fi
+fi
+
+# ✨ 定義虛擬環境的 Python 執行檔路徑 (確保 VENV_DIR 在此之前已定義)
+VENV_PYTHON="$REPO_DIR/$VENV_DIR/bin/python3"
+
+# ==============================================================================
+# 核心邏輯 3.5：檢查 google.genai 是否可導入 (新增互動式安裝)
+# ==============================================================================
+echo -e "${LIGHT_BLUE}🔍 正在驗證 LPM 核心依賴：google-genai...${NC}"
+if ! "$VENV_PYTHON" -c "from google import genai" &> /dev/null; then
+    echo -e "${RED}❌ 驗證失敗：無法在虛擬環境中找到 'google.genai' 模組。${NC}"
+    echo -e -n "${YELLOW}❓ 是否要立即在虛擬環境中安裝 google-genai 模組？ (y/N): ${NC}"
+    read -r install_genai_resp
+
+    if [[ "$install_genai_resp" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        echo -e "\n${LIGHT_BLUE}🚀 正在虛擬環境中安裝 google-genai 模組...${NC}"
+        # 確保 pip 在虛擬環境中執行
+        if "$VENV_PYTHON" -m pip install google-genai --quiet; then
+            echo -e "${GREEN}✔ google-genai 模組安裝成功！${NC}\n"
+            # 重新驗證是否成功導入
+            if ! "$VENV_PYTHON" -c "from google import genai" &> /dev/null; then
+                echo -e "${RED}❌ google-genai 模組安裝成功，但仍無法導入！請檢查虛擬環境或重新運行 install.sh。${NC}"
+                exit 1
+            fi
+        else
+            echo -e "${RED}❌ google-genai 模組安裝失敗！${NC}"
+            echo -e "${YELLOW}💡 提示：請檢查網路連線，或手動在虛擬環境中執行 'pip install google-genai'。${NC}\n"
+            exit 1
+        fi
+    else
+        echo -e "\n${RED}❌ 您選擇了不安裝 'google-genai'。LPM 核心功能將無法運作。${NC}"
+        echo -e "${LIGHT_BLUE}💡 提示：請重新運行 install.sh 並同意安裝，或手動在虛擬環境中執行 'pip install google-genai'。${NC}\n"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✔ google.genai 模組驗證成功！${NC}\n"
 fi
 
 # ==============================================================================
@@ -124,7 +165,7 @@ elif [ -f "venv/bin/activate" ]; then
 fi
 
 # 執行 LPM 管理工具 (並將命令列參數完美透傳)
-python3 manager.py "\$@"
+"$VENV_PYTHON" manager.py "\$@"
 EOF
 
     # 賦予執行權限
@@ -139,19 +180,19 @@ EOF
     echo -e "   系統就會自動進入 Python 虛擬環境並為您秒開 LPM 管理工具！"
     echo -e "${GREEN}==================================================${NC}"
     
-    echo -e "\n${GREEN}🚀 請閱讀上方教學後，按任意鍵啟動 LPM 管理工具...${NC}\n"
+    echo -e "\\n${GREEN}🚀 請閱讀上方教學後，按任意鍵啟動 LPM 管理工具...${NC}\\n"
     read -n 1 -s -r -p "Press any key to launch LPM..."
     echo "" # Add a newline after the "Press any key..." prompt
-    python3 manager.py "$@"
+    "$VENV_PYTHON" manager.py "$@"
 
 else
     # ==============================================================================
     # 🚀 核心邏輯 5：用戶選擇 N 時，保留提示並立刻在虛擬環境秒開 LPM！
     # ==============================================================================
-    echo -e "\n${YELLOW}ℹ️ 已跳過快捷腳本建立。您日後仍可在專案目錄下透過 python3 manager.py 啟動。${NC}"
-    echo -e "${GREEN}🚀 請閱讀上方教學後，按任意鍵啟動 LPM 管理工具...${NC}\n"
+    echo -e "\\n${YELLOW}ℹ️ 已跳過快捷腳本建立。您日後仍可在專案目錄下透過 python3 manager.py 啟動。${NC}"
+    echo -e "${GREEN}🚀 請閱讀上方教學後，按任意鍵啟動 LPM 管理工具...${NC}\\n"
     
     read -n 1 -s -r -p "Press any key to launch LPM..."
     echo "" # Add a newline after the "Press any key..." prompt
-    python3 manager.py "$@"
+    "$VENV_PYTHON" manager.py "$@"
 fi
