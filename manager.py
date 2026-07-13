@@ -769,7 +769,7 @@ class LinuxPackageManagerApp(App):
             if action == "open_settings":
                 def apply_settings_callback(settings_data: dict | None) -> None:
                     if settings_data is not None:
-                        selected_engine = settings_data.get("ai_engine", None) # Default to None if not found
+                        selected_engine = settings_data.get("ai_engine", None)
                         new_token = settings_data.get("api_token", "").strip()
                         ssh_mode = settings_data.get("ssh_mode", False)
                         pref_mgr = settings_data.get("preferred_mgr", "apt")
@@ -785,8 +785,13 @@ class LinuxPackageManagerApp(App):
                             self.notify(f"❌ AI 初始化失敗: {str(e)}", severity="error")
                             return
 
-                        # 檢查 selected_engine 是否為 None，如果是則使用預設文字
-                        engine_display = selected_engine.upper() if selected_engine else "未選擇的 AI 引擎"
+                        # Explicitly check for None or Select.NULL before calling upper()
+                        # Use __import__ to safely access Select.NULL if Select is not directly imported
+                        from textual.widgets import Select # Ensure Select is imported if not already
+                        if selected_engine is None or selected_engine == Select.NULL:
+                            engine_display = "未選擇的 AI 引擎"
+                        else:
+                            engine_display = selected_engine.upper()
 
                         if new_token:
                             self.notify(f"⚙️ {engine_display} 已切換，金鑰儲存成功！")
