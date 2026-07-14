@@ -88,42 +88,6 @@ class SettingsScreen(ModalScreen):
                 yield Label("進階選項：", classes="setting-label")
                 yield Checkbox("開啟 SSH 內建終端機模式 (解決遠端彈窗問題)", value=self.ssh_mode, id="setting-ssh-mode", classes="setting-control")
 
-            # ✨ 動態生成系統支援的套件管理員清單字典
-            mgr_labels = {
-                "apt": "APT (Ubuntu/Debian 穩健)",
-                "pacman": "Pacman (Arch 預設)",
-                "yay": "Yay (AUR 助手)",
-                "paru": "Paru (AUR 助手)",
-                "dnf": "DNF (Fedora 預設)",
-                "zypper": "Zypper (openSUSE 預設)",
-                "apk": "APK (Alpine 預設)",
-                "snap": "Snap (跨平台/最新)",
-                "flatpak": "Flatpak (沙盒/跨平台)",
-                "brew": "Homebrew (跨平台)"
-            }
-            
-            # 依據 sys_status 過濾出真的有安裝的
-            available_mgrs = []
-            for mgr, is_installed in self.sys_status.items():
-                if is_installed:
-                    label = mgr_labels.get(mgr, mgr.upper())
-                    available_mgrs.append((label, mgr))
-                    
-            if not available_mgrs:
-                available_mgrs = [("系統預設", "apt")] # 極端情況防呆
-
-            # 確保目前的偏好值真的存在於可用清單中，否則自動切換到清單第一個
-            safe_pref_mgr = self.preferred_mgr if self.preferred_mgr in [m[1] for m in available_mgrs] else available_mgrs[0][1]
-
-            # ✨ 動態下拉選單
-            with Horizontal(classes="setting-row"):
-                yield Label("偏好安裝來源：", classes="setting-label")
-                yield Select(
-                    options=available_mgrs,
-                    value=safe_pref_mgr,
-                    id="setting-pref-mgr", classes="setting-control"
-                )
-
             yield Button("📋 預覽並複製系統資訊 (Debug Info)", id="btn_copy_sys_info", variant="primary")
 
             with Horizontal(classes="settings-btn-box"):
@@ -139,7 +103,7 @@ class SettingsScreen(ModalScreen):
             ai_choice = self.query_one("#setting-ai-model").value
             api_token = self.query_one("#setting-api-token").value
             ssh_mode = self.query_one("#setting-ssh-mode").value
-            pref_mgr = self.query_one("#setting-pref-mgr").value
+            pref_mgr = self.preferred_mgr  # 欄位已移除，維持原本傳入的偏好值不變
             
             # 移除檢查 ai_choice 是否為空或 Select.BLANK 的邏輯
             # 並直接 dismiss，即使 ai_choice 是空的

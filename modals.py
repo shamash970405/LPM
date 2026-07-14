@@ -151,60 +151,76 @@ class SearchLoadingModal(ModalScreen):
         sys_status = self.main_app.sys_status
         tasks = []
         
-        async def fetch_all_managers(self, kw: str) -> dict:
-        #🚀 平行發起所有支援的管理員套件搜尋 (安全防注入版)
-            sys_status = getattr(self.app, "sys_status", {})
-        tasks = []
-
-        # 🔻--- 注意：從這裡開始是內部函式，必須往右縮排 8 個空白（2 個 Tab）---🔻
-        async def fetch_candidates(mgr: str, kw: str) -> list:
-            if not kw or not kw.strip():
-                return []
-            clean_kw = kw.strip()
-
-            # 🎯 12 種套件管理員安全參數陣列
-            exec_map = {
-                "apt":     ["apt-cache", "search", "--names-only", clean_kw],
-                "pacman":  ["pacman", "-Ss", clean_kw],
-                "yay":     ["yay", "-Ss", clean_kw],
-                "paru":    ["paru", "-Ss", clean_kw],
-                "dnf":     ["dnf", "search", clean_kw],
-                "zypper":  ["zypper", "search", clean_kw],
-                "apk":     ["apk", "search", clean_kw],
-                "xbps":    ["xbps-query", "-Rs", clean_kw],
-                "emerge":  ["emerge", "--search", clean_kw],
-                "snap":    ["snap", "find", clean_kw],
-                "flatpak": ["flatpak", "search", clean_kw],
-                "brew":    ["brew", "search", clean_kw]
-            }
-
-            if mgr not in exec_map:
-                return []
-
+        async def fetch_candidates(mgr_name, keyword):
+            import shutil
             try:
-                cmd_args = exec_map[mgr]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd_args, 
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                stdout, _ = await proc.communicate()
+                # 🛡️ 安全過濾與連字號轉換：將 "google chro" 轉為 "google-chro"
+                keyword = keyword.replace("'", "")
+                kw_lower = keyword.lower().strip()
+                kw_hyphen = kw_lower.replace(" ", "-")
                 
-                if proc.returncode == 0 and stdout:
-                    lines = stdout.decode("utf-8", errors="ignore").strip().split("\n")
-                    results = []
-                    for line in lines:
-                        clean_line = line.strip()
-                        if clean_line and not clean_line.startswith(("Sorting", "Full", "Name", "---", "===")):
-                            pkg_name = clean_line.split()[0].split("/")[0].strip()
-                            if pkg_name and pkg_name not in results:
-                                results.append(pkg_name)
-                    return results[:20]
-            except (FileNotFoundError, PermissionError):
-                pass
-            except Exception:
-                pass
-            return []
+                # 🚀 放大終端機抓取量到 50 筆，避免真正的套件被截斷
+                fetch_limit = 50
+                out_names = []
+                
+                if mgr_name == "apt":
+                    cmd = shutil.which("apt-cache") or "apt-cache"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --names-only '{keyword}' 2>/dev/null | awk '{{print $1}}' | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
+                    
+                elif mgr_name == "snap":
+                    cmd = shutil.which("snap") or "snap"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} find '{keyword}' 2>/dev/null | awk 'NR>1 {{print $1}}' | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "No" not in n]
+                    
+                elif mgr_name == "flatpak":
+                    cmd = shutil.which("flatpak") or "flatpak"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} search --columns=application '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n and "Application" not in n and "---" not in n]
+                    
+                elif mgr_name == "pacman":
+                    cmd = shutil.which("pacman") or "pacman"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
+                    
+                elif mgr_name == "yay":
+                    cmd = shutil.which("yay") or "yay"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
+                    
+                elif mgr_name == "paru":
+                    cmd = shutil.which("paru") or "paru"
+                    proc = await asyncio.create_subprocess_shell(f"{cmd} -Ssq '{keyword}' 2>/dev/null | head -n {fetch_limit}", stdout=asyncio.subprocess.PIPE)
+                    out, _ = await proc.communicate()
+                    out_names = [n for n in out.decode('utf-8', errors='ignore').strip().split('\n') if n]
+                
+                # 🧠 核心精準度演算法：幫抓出來的套件打分數 (越小越優先)
+                def rank_pkg(pkg):
+                    pkg_l = pkg.lower()
+                    # 階級 0: 完全命中
+                    if pkg_l == kw_hyphen or pkg_l == kw_lower: return 0
+                    # 階級 1: 開頭完全吻合 (例如 google-chrome)
+                    if pkg_l.startswith(kw_hyphen) or pkg_l.startswith(kw_lower): return 1
+                    # 階級 2: 名字裡面包含連字號關鍵字
+                    if kw_hyphen in pkg_l: return 2
+                    # 階級 3: 包含以空白分割的所有單字 (google, chro)
+                    parts = kw_lower.split()
+                    if all(p in pkg_l for p in parts): return 3
+                    # 階級 4: 其他靠描述混進來的雜魚
+                    return 4
+
+                # 依據精準度排序，然後只取最前面的 8 個精華！
+                sorted_names = sorted(out_names, key=rank_pkg)
+                return (mgr_name, sorted_names[:8])
+
+            except Exception: 
+                pass 
+            return (mgr_name, [])
 
         # 任務派發
         if sys_status.get("apt"): tasks.append(fetch_candidates("apt", kw))
