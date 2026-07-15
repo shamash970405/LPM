@@ -492,6 +492,13 @@ class BatchActionModal(ModalScreen):
             raw_packages = [p.strip() for p in input_value.split(",") if p.strip()]
             is_install = self.query_one("#radio-install").value
             
+            # ✨ 如果選擇的是「一次催吐 (批量卸載)」，直接調用主程式的批量卸載共用大腦！
+            if not is_install:
+                self.main_app.perform_batch_uninstall(raw_packages, "🔮 批次催吐操作完成，系統套件已同步！")
+                self.dismiss()
+                return
+
+            # 如果是批量安裝，才進入跨通路搜尋載入畫面
             self.query_one("#batch-confirm").disabled = True
             self.query_one("#batch-cancel").disabled = True
 
@@ -501,7 +508,6 @@ class BatchActionModal(ModalScreen):
                     self.query_one("#batch-cancel").disabled = False
                     return
 
-                # 🚀 透過主程式的大一統引擎發射！
                 self.main_app.execute_and_refresh(final_cmd, "🔮 批次操作完成，系統套件已同步！")
                 self.dismiss()
 
